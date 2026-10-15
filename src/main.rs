@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use gpg_keys::{backup, master, paper};
+use gpg_keys::{
+    backup::{self, Backup, BackupSecret, SecretKind},
+    master, paper,
+};
 use sequoia_openpgp::serialize::Serialize;
 use std::{
     fs::{File, OpenOptions},
@@ -11,7 +14,7 @@ use zeroize::Zeroizing;
 #[derive(Parser)]
 #[command(
     version,
-    about = "Recoverable OpenPGP certification keys with 40-word paper backups"
+    about = "Recoverable OpenPGP master keys with 35-word compact or 44-word raw backups"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -27,9 +30,16 @@ struct Output {
 
 #[derive(Args)]
 struct Input {
-    /// Input file; '-' reads stdin. Avoid entering secrets as command-line arguments.
+    /// Input file; '-' reads stdin. Avoid secrets in command-line arguments.
     #[arg(short, long, default_value = "-")]
     input: String,
+}
+
+#[derive(Args)]
+struct Creation {
+    /// Unix seconds for exact recovery; default: the current time.
+    #[arg(long)]
+    created_at: Option<u32>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -38,33 +48,65 @@ enum Format {
     Binary,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum Kind {
+    Compact,
+    Raw,
+}
+impl From<Kind> for SecretKind {
+    fn from(kind: Kind) -> Self {
+        match kind {
+            Kind::Compact => Self::CompactEntropy,
+            Kind::Raw => Self::Raw,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
-    /// Generate a random 256-bit seed and encode it as 40 words.
+    /// Generate 160 bits of OS entropy as a 35-word compact backup.
     Random {
+        #[command(flatten)]
+        creation: Creation,
         #[command(flatten)]
         output: Output,
     },
-    /// Derive a seed using Argon2id from at least 256 high-entropy binary digits.
+    /// Derive compact entropy using Argon2id from at least 160 high-entropy bits.
     Derive {
         #[command(flatten)]
         input: Input,
         #[command(flatten)]
+        creation: Creation,
+        #[command(flatten)]
         output: Output,
     },
-    /// ADVANCED: encode an exact 256-bit seed; its entropy is your responsibility.
+    /// ADVANCED: encode exact compact entropy (160 bits) or a raw Ed25519 seed (256 bits).
     Encode {
         #[command(flatten)]
         input: Input,
         #[arg(long, value_enum, default_value = "hex")]
         format: Format,
+        #[arg(long, value_enum, default_value = "compact")]
+        kind: Kind,
+        #[command(flatten)]
+        creation: Creation,
         #[command(flatten)]
         output: Output,
     },
-    /// Validate 40 words and output the exact seed in hexadecimal.
+    /// Validate words; output the stored secret in hex and metadata on stderr.
     Decode {
         #[command(flatten)]
         input: Input,
+        #[command(flatten)]
+        output: Output,
+    },
+    /// Import an existing v4/algorithm-22 Ed25519 master secret as a raw backup.
+    Import {
+        #[command(flatten)]
+        input: Input,
+        /// Passphrase file for an encrypted secret-key export; '-' reads stdin.
+        #[arg(long)]
+        passphrase_file: Option<String>,
         #[command(flatten)]
         output: Output,
     },
@@ -87,12 +129,14 @@ enum Command {
         #[command(flatten)]
         output: Output,
     },
-    /// Output a self-contained Typst A5 template, instructions, and full wordlist.
+    /// Output a blank, self-contained Typst A5 template for the selected variant.
     Template {
+        #[arg(long, value_enum, default_value = "compact")]
+        kind: Kind,
         #[command(flatten)]
         output: Output,
     },
-    /// Output the pinned 1024-word list, in index order (zero-based).
+    /// Output the pinned 1024-word list, in zero-based index order.
     Wordlist {
         #[command(flatten)]
         output: Output,
@@ -113,6 +157,18 @@ fn read_input(path: &str) -> Result<Zeroizing<Vec<u8>>> {
 
 fn text(bytes: &[u8]) -> Result<&str> {
     std::str::from_utf8(bytes).context("input must be UTF-8 text")
+}
+
+fn read_password(path: &str) -> Result<Zeroizing<Vec<u8>>> {
+    let mut password = read_input(path)?;
+    if password.ends_with(b"\n") {
+        password.pop();
+        if password.ends_with(b"\r") {
+            password.pop();
+        }
+    }
+    ensure!(!password.is_empty(), "passphrase must not be empty");
+    Ok(password)
 }
 
 fn write_output(path: &str, bytes: &[u8]) -> Result<()> {
@@ -137,38 +193,85 @@ fn write_output(path: &str, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn metadata(backup: &Backup) {
+    eprintln!(
+        "Variant: {}; created-at: {}; words: {}",
+        backup.kind().name(),
+        backup.created_at(),
+        backup.word_count()
+    );
+}
+
+fn store_new(secret: BackupSecret, creation: Creation, output: Output) -> Result<()> {
+    let backup = match creation.created_at {
+        Some(time) => Backup::new(secret, time),
+        None => Backup::new_now(secret)?,
+    };
+    write_output(&output.output, backup.encode().as_bytes())?;
+    metadata(&backup);
+    Ok(())
+}
+
+fn separate_stdin(input: &Input, password: &Option<String>) -> Result<()> {
+    ensure!(
+        password.as_deref() != Some("-") || input.input != "-",
+        "key material and passphrase cannot both read stdin"
+    );
+    Ok(())
+}
+
 fn run() -> Result<()> {
     match Cli::parse().command {
-        Command::Random { output } => write_output(
-            &output.output,
-            backup::encode(&backup::random()?).as_bytes(),
-        )?,
-        Command::Derive { input, output } => {
+        Command::Random { creation, output } => store_new(backup::random()?, creation, output)?,
+        Command::Derive {
+            input,
+            creation,
+            output,
+        } => {
             eprintln!("Provide high-entropy bits: a KDF cannot create missing entropy.");
             let bytes = read_input(&input.input)?;
-            write_output(
-                &output.output,
-                backup::encode(&backup::derive(text(&bytes)?)?).as_bytes(),
-            )?;
+            store_new(backup::derive(text(&bytes)?)?, creation, output)?;
         }
         Command::Encode {
             input,
             format,
+            kind,
+            creation,
             output,
         } => {
             eprintln!(
-                "WARNING: exact-seed input is for advanced users; the seed must already have sufficient entropy."
+                "WARNING: exact-secret input is for advanced users; its entropy is your responsibility."
             );
             let bytes = read_input(&input.input)?;
-            let secret = backup::parse_exact(text(&bytes)?, matches!(format, Format::Binary))?;
-            write_output(&output.output, backup::encode(&secret).as_bytes())?;
+            store_new(
+                backup::parse_exact(text(&bytes)?, matches!(format, Format::Binary), kind.into())?,
+                creation,
+                output,
+            )?;
         }
         Command::Decode { input, output } => {
             let bytes = read_input(&input.input)?;
-            let secret = backup::decode(text(&bytes)?)?;
-            let mut result = Zeroizing::new(hex::encode(secret.as_ref()));
+            let backup = Backup::decode(text(&bytes)?)?;
+            let mut result = Zeroizing::new(hex::encode(backup.secret().payload()));
             result.push('\n');
             write_output(&output.output, result.as_bytes())?;
+            metadata(&backup);
+        }
+        Command::Import {
+            input,
+            passphrase_file,
+            output,
+        } => {
+            separate_stdin(&input, &passphrase_file)?;
+            let bytes = read_input(&input.input)?;
+            let password = passphrase_file.as_deref().map(read_password).transpose()?;
+            let backup = master::import(&bytes, password.as_ref().map(|p| p.as_slice()))?;
+            write_output(&output.output, backup.encode().as_bytes())?;
+            metadata(&backup);
+            eprintln!(
+                "Primary fingerprint: {}",
+                master::certificate(&backup, "Imported master key")?.fingerprint()
+            );
         }
         Command::Export {
             input,
@@ -178,22 +281,12 @@ fn run() -> Result<()> {
             public,
             output,
         } => {
-            ensure!(
-                passphrase_file.as_deref() != Some("-") || input.input != "-",
-                "mnemonic and passphrase cannot both read stdin"
-            );
+            separate_stdin(&input, &passphrase_file)?;
             let bytes = read_input(&input.input)?;
-            let secret = backup::decode(text(&bytes)?)?;
-            let mut cert = master::certificate(&secret, &identity)?;
+            let backup = Backup::decode(text(&bytes)?)?;
+            let mut cert = master::certificate(&backup, &identity)?;
             if let Some(path) = passphrase_file {
-                let mut password = read_input(&path)?;
-                if password.ends_with(b"\n") {
-                    password.pop();
-                    if password.ends_with(b"\r") {
-                        password.pop();
-                    }
-                }
-                cert = master::protect(cert, &password)?;
+                cert = master::protect(cert, &read_password(&path)?)?;
             } else if unprotected {
                 eprintln!("WARNING: exporting an unprotected secret master key.");
             }
@@ -206,7 +299,9 @@ fn run() -> Result<()> {
             write_output(&output.output, &result)?;
             eprintln!("Primary fingerprint: {}", cert.fingerprint());
         }
-        Command::Template { output } => write_output(&output.output, paper::template().as_bytes())?,
+        Command::Template { kind, output } => {
+            write_output(&output.output, paper::template(kind.into()).as_bytes())?
+        }
         Command::Wordlist { output } => write_output(&output.output, backup::WORDLIST.as_bytes())?,
     }
     Ok(())

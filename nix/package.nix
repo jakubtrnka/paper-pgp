@@ -36,7 +36,7 @@ rustPlatform.buildRustPackage {
   doCheck = true;
 
   meta = {
-    description = "Recoverable OpenPGP certification keys with 40-word paper backups";
+    description = "Recoverable OpenPGP master keys with compact and raw paper backups";
     license = lib.licenses.mit;
     mainProgram = "gpg-keys";
     platforms = lib.platforms.unix;

@@ -1,9 +1,13 @@
-use gpg_keys::{backup, master};
+use gpg_keys::{
+    backup::{Backup, BackupSecret, SecretKind},
+    master,
+};
 use sequoia_openpgp::{Cert, parse::Parse, serialize::Serialize};
 use std::{
     fs,
     path::Path,
     process::{Command, Output},
+    time::SystemTime,
 };
 use zeroize::Zeroizing;
 
@@ -13,7 +17,6 @@ fn cli(args: &[&str]) -> Output {
         .output()
         .unwrap()
 }
-
 fn succeeds(output: Output) -> Output {
     assert!(
         output.status.success(),
@@ -24,74 +27,222 @@ fn succeeds(output: Output) -> Output {
 }
 
 #[test]
-fn file_workflow_and_protection() {
-    let dir = tempfile::tempdir().unwrap();
-    let words = dir.path().join("words.txt");
-    let words = words.to_str().unwrap();
-    succeeds(cli(&["random", "-o", words]));
-    let original = fs::read(words).unwrap();
-    assert!(backup::decode(std::str::from_utf8(&original).unwrap()).is_ok());
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            fs::metadata(words).unwrap().permissions().mode() & 0o777,
-            0o600
+fn file_workflow_and_protection_for_both_variants() {
+    for kind in [SecretKind::CompactEntropy, SecretKind::Raw] {
+        let dir = tempfile::tempdir().unwrap();
+        let words_path = dir.path().join("words.txt");
+        let words = words_path.to_str().unwrap();
+        if kind == SecretKind::CompactEntropy {
+            let before = gpg_keys::backup::timestamp(SystemTime::now()).unwrap();
+            succeeds(cli(&["random", "-o", words]));
+            let after = gpg_keys::backup::timestamp(SystemTime::now()).unwrap();
+            let generated = Backup::decode(&fs::read_to_string(words).unwrap()).unwrap();
+            assert!((before..=after).contains(&generated.created_at()));
+        } else {
+            let raw_input = dir.path().join("raw.hex");
+            fs::write(&raw_input, "2a".repeat(32)).unwrap();
+            succeeds(cli(&[
+                "encode",
+                "--kind",
+                "raw",
+                "--created-at",
+                "1234567890",
+                "-i",
+                raw_input.to_str().unwrap(),
+                "-o",
+                words,
+            ]));
+        }
+        let original = fs::read(words).unwrap();
+        let backup = Backup::decode(std::str::from_utf8(&original).unwrap()).unwrap();
+        assert_eq!(backup.kind(), kind);
+        assert_eq!(backup.word_count(), kind.word_count());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(words).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        assert!(!cli(&["random", "-o", words]).status.success());
+        assert_eq!(fs::read(words).unwrap(), original);
+        let decoded = succeeds(cli(&["decode", "-i", words]));
+        assert!(
+            String::from_utf8_lossy(&decoded.stderr)
+                .contains(&format!("created-at: {}", backup.created_at()))
         );
+        assert_eq!(decoded.stdout.len(), kind.payload_len() * 2 + 1);
+        let seed_file = dir.path().join("seed.hex");
+        fs::write(&seed_file, &decoded.stdout).unwrap();
+        assert_eq!(
+            succeeds(cli(&[
+                "encode",
+                "--kind",
+                kind.name(),
+                "--created-at",
+                &backup.created_at().to_string(),
+                "-i",
+                seed_file.to_str().unwrap()
+            ]))
+            .stdout,
+            original
+        );
+        let base_args = [
+            "export",
+            "-i",
+            words,
+            "--identity",
+            "Test <test@example.org>",
+        ];
+        assert!(!cli(&base_args).status.success());
+        let mut args = base_args.to_vec();
+        args.push("--public");
+        let public_bytes = succeeds(cli(&args)).stdout;
+        let public = Cert::from_bytes(&public_bytes).unwrap();
+        assert!(!public.is_tsk());
+        assert_eq!(
+            gpg_keys::backup::timestamp(public.primary_key().key().creation_time()).unwrap(),
+            backup.created_at()
+        );
+        let password = dir.path().join("password");
+        fs::write(&password, "test password\r\n").unwrap();
+        let mut args = base_args.to_vec();
+        args.extend(["--passphrase-file", password.to_str().unwrap()]);
+        let secret_bytes = succeeds(cli(&args)).stdout;
+        let private = Cert::from_bytes(&secret_bytes).unwrap();
+        assert!(private.is_tsk());
+        assert_eq!(private.fingerprint(), public.fingerprint());
+        let key = private
+            .primary_key()
+            .key()
+            .clone()
+            .parts_into_secret()
+            .unwrap();
+        assert!(!key.has_unencrypted_secret());
+        assert!(
+            key.decrypt_secret(&sequoia_openpgp::crypto::Password::from(
+                &b"test password"[..]
+            ))
+            .is_ok()
+        );
+        let exported = dir.path().join("master.asc");
+        fs::write(&exported, &secret_bytes).unwrap();
+        assert!(
+            !cli(&["import", "-i", exported.to_str().unwrap()])
+                .status
+                .success()
+        );
+        let imported = succeeds(cli(&[
+            "import",
+            "-i",
+            exported.to_str().unwrap(),
+            "--passphrase-file",
+            password.to_str().unwrap(),
+        ]));
+        let raw_backup = Backup::decode(std::str::from_utf8(&imported.stdout).unwrap()).unwrap();
+        assert_eq!(raw_backup.kind(), SecretKind::Raw);
+        assert_eq!(raw_backup.created_at(), backup.created_at());
+        assert_eq!(
+            raw_backup.secret().payload(),
+            master::ed25519_seed(backup.secret()).as_ref()
+        );
+        assert_eq!(
+            master::certificate(&raw_backup, "Recovered")
+                .unwrap()
+                .fingerprint(),
+            public.fingerprint()
+        );
+        fs::write(&password, "wrong").unwrap();
+        assert!(
+            !cli(&[
+                "import",
+                "-i",
+                exported.to_str().unwrap(),
+                "--passphrase-file",
+                password.to_str().unwrap()
+            ])
+            .status
+            .success()
+        );
+        fs::write(&password, "\n").unwrap();
+        assert!(!cli(&args).status.success());
+        fs::write(&exported, public_bytes).unwrap();
+        assert!(
+            !cli(&["import", "-i", exported.to_str().unwrap()])
+                .status
+                .success()
+        );
+        let typst =
+            String::from_utf8(succeeds(cli(&["template", "--kind", kind.name()])).stdout).unwrap();
+        assert!(typst.contains("paper: \"a5\""));
+        assert!(typst.contains("#backup-document(("));
+        assert!(typst.contains(&format!("kind: \"{}\"", kind.name())));
+        assert!(!typst.contains("read("));
+        for word in gpg_keys::backup::WORDLIST.lines() {
+            assert!(typst.contains(&format!("  \"{word}\",\n")));
+        }
+        assert!(!typst.contains(std::str::from_utf8(&original).unwrap().trim()));
+        assert!(typst.contains(gpg_keys::backup::WORDLIST_SHA256));
     }
-    assert!(!cli(&["random", "-o", words]).status.success());
-    assert_eq!(fs::read(words).unwrap(), original);
-    let hex = succeeds(cli(&["decode", "-i", words]));
-    let seed_file = dir.path().join("seed.hex");
-    fs::write(&seed_file, &hex.stdout).unwrap();
-    assert_eq!(
-        succeeds(cli(&["encode", "-i", seed_file.to_str().unwrap()])).stdout,
-        original
-    );
-    let export_args = [
-        "export",
+}
+
+#[test]
+fn explicit_compact_input_and_entropy_derivation() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("bits.txt");
+    fs::write(&input, "10101010\n".repeat(20)).unwrap();
+    let encoded = succeeds(cli(&[
+        "encode",
+        "--format",
+        "binary",
+        "--created-at",
+        "1700000000",
         "-i",
-        words,
-        "--identity",
-        "Test <test@example.org>",
-    ];
-    assert!(!cli(&export_args).status.success());
-    let mut args = export_args.to_vec();
-    args.push("--public");
-    let public = Cert::from_bytes(&succeeds(cli(&args)).stdout).unwrap();
-    assert!(!public.is_tsk());
-    let password = dir.path().join("password");
-    fs::write(&password, "test password\r\n").unwrap();
-    let mut args = export_args.to_vec();
-    args.extend(["--passphrase-file", password.to_str().unwrap()]);
-    let private = Cert::from_bytes(&succeeds(cli(&args)).stdout).unwrap();
-    assert!(private.is_tsk());
-    assert_eq!(private.fingerprint(), public.fingerprint());
-    let key = private
-        .primary_key()
-        .key()
-        .clone()
-        .parts_into_secret()
-        .unwrap();
-    assert!(!key.has_unencrypted_secret());
+        input.to_str().unwrap(),
+    ]));
+    let backup = Backup::decode(std::str::from_utf8(&encoded.stdout).unwrap()).unwrap();
+    assert_eq!(backup.secret().payload(), [170; 20]);
+    let derived = succeeds(cli(&[
+        "derive",
+        "--created-at",
+        "1700000000",
+        "-i",
+        input.to_str().unwrap(),
+    ]));
+    let derived = Backup::decode(std::str::from_utf8(&derived.stdout).unwrap()).unwrap();
+    assert_eq!(derived.kind(), SecretKind::CompactEntropy);
+    assert_ne!(derived.secret().payload(), backup.secret().payload());
     assert!(
-        key.decrypt_secret(&sequoia_openpgp::crypto::Password::from(
-            &b"test password"[..]
-        ))
-        .is_ok()
+        !cli(&[
+            "encode",
+            "--kind",
+            "raw",
+            "--format",
+            "binary",
+            "-i",
+            input.to_str().unwrap()
+        ])
+        .status
+        .success()
     );
-    fs::write(&password, "\n").unwrap();
-    assert!(!cli(&args).status.success());
-    let form = succeeds(cli(&["template"]));
-    let typst = String::from_utf8(form.stdout).unwrap();
-    assert!(typst.contains("paper: \"a5\""));
-    assert!(typst.contains("#backup-document(("));
-    assert!(!typst.contains("read(")); // No external files are needed to compile it.
-    for word in backup::WORDLIST.lines() {
-        assert!(typst.contains(&format!("  \"{word}\",\n")));
-    }
-    assert!(!typst.contains(std::str::from_utf8(&original).unwrap().trim()));
-    assert!(typst.contains(backup::WORDLIST_SHA256));
+    assert!(
+        !cli(&[
+            "encode",
+            "--created-at",
+            "4294967296",
+            "-i",
+            input.to_str().unwrap()
+        ])
+        .status
+        .success()
+    );
+    fs::write(&input, "1".repeat(152)).unwrap();
+    assert!(
+        !cli(&["derive", "-i", input.to_str().unwrap()])
+            .status
+            .success()
+    );
 }
 
 fn gpg(home: &Path, args: &[&str]) -> Output {
@@ -113,8 +264,18 @@ fn gpg(home: &Path, args: &[&str]) -> Output {
         .output()
         .expect("GnuPG must be installed for this ignored test")
 }
-
 struct AgentHome(tempfile::TempDir);
+impl AgentHome {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        Self(dir)
+    }
+}
 impl Drop for AgentHome {
     fn drop(&mut self) {
         let _ = Command::new("gpgconf")
@@ -131,63 +292,83 @@ impl Drop for AgentHome {
 #[test]
 #[ignore = "requires GnuPG and permission to launch gpg-agent; uses isolated temporary keyrings"]
 fn gpg_import_add_subkeys_and_recover() {
-    let home = AgentHome(tempfile::tempdir().unwrap());
-    let recovered_home = AgentHome(tempfile::tempdir().unwrap());
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for directory in [&home, &recovered_home] {
-            fs::set_permissions(directory.0.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        }
+    for kind in [SecretKind::CompactEntropy, SecretKind::Raw] {
+        let home = AgentHome::new();
+        let recovered_home = AgentHome::new();
+        let secret = match kind {
+            SecretKind::CompactEntropy => BackupSecret::CompactEntropy(Zeroizing::new([0; 20])),
+            SecretKind::Raw => {
+                let mut seed = Zeroizing::new([42; 32]);
+                seed[0] = 0;
+                BackupSecret::Raw(seed)
+            }
+        };
+        let backup = Backup::new(secret, 1234567890);
+        let cert = master::certificate(&backup, "Recovery Test <test@example.org>").unwrap();
+        let fingerprint = cert.fingerprint().to_string();
+        let protected = master::protect(cert.clone(), b"integration-test-only").unwrap();
+        let export = home.0.path().join("master.asc");
+        let mut armor = Vec::new();
+        protected.as_tsk().armored().serialize(&mut armor).unwrap();
+        fs::write(&export, armor).unwrap();
+        succeeds(gpg(home.0.path(), &["--import", export.to_str().unwrap()]));
+        succeeds(gpg(
+            home.0.path(),
+            &["--quick-add-key", &fingerprint, "ed25519", "sign", "1y"],
+        ));
+        succeeds(gpg(
+            home.0.path(),
+            &["--quick-add-key", &fingerprint, "cv25519", "encr", "1y"],
+        ));
+        let listing = String::from_utf8(
+            succeeds(gpg(
+                home.0.path(),
+                &["--with-colons", "--list-secret-keys", &fingerprint],
+            ))
+            .stdout,
+        )
+        .unwrap();
+        assert_eq!(listing.lines().filter(|l| l.starts_with("ssb:")).count(), 2);
+        let public = succeeds(gpg(home.0.path(), &["--export", &fingerprint]));
+        let public_file = home.0.path().join("public.pgp");
+        fs::write(&public_file, &public.stdout).unwrap();
+        // Import an actual GnuPG export (which also contains subkeys); select only
+        // its primary key, preserve the timestamp, and bypass HKDF on recovery.
+        let secret_export = succeeds(gpg(home.0.path(), &["--export-secret-keys", &fingerprint]));
+        let raw = master::import(&secret_export.stdout, Some(b"integration-test-only")).unwrap();
+        assert_eq!(raw.kind(), SecretKind::Raw);
+        assert_eq!(raw.created_at(), backup.created_at());
+        let native_recovery =
+            master::certificate(&Backup::decode(&raw.encode()).unwrap(), "Native recovery")
+                .unwrap();
+        assert_eq!(native_recovery.fingerprint(), cert.fingerprint());
+        let recovered = master::certificate(
+            &Backup::decode(&backup.encode()).unwrap(),
+            "Recovery Test <test@example.org>",
+        )
+        .unwrap();
+        assert_eq!(recovered.fingerprint(), cert.fingerprint());
+        let recovered_file = home.0.path().join("recovered.pgp");
+        let mut bytes = Vec::new();
+        recovered.as_tsk().serialize(&mut bytes).unwrap();
+        fs::write(&recovered_file, bytes).unwrap();
+        succeeds(gpg(
+            recovered_home.0.path(),
+            &["--import", recovered_file.to_str().unwrap()],
+        ));
+        succeeds(gpg(
+            recovered_home.0.path(),
+            &["--import", public_file.to_str().unwrap()],
+        ));
+        let merged = Cert::from_bytes(
+            &succeeds(gpg(recovered_home.0.path(), &["--export", &fingerprint])).stdout,
+        )
+        .unwrap();
+        assert_eq!(merged.fingerprint(), cert.fingerprint());
+        assert_eq!(merged.keys().count(), 3);
+        succeeds(gpg(
+            recovered_home.0.path(),
+            &["--quick-add-key", &fingerprint, "ed25519", "auth", "1y"],
+        ));
     }
-    let seed = Zeroizing::new([0; 32]); // Edge case: the backup seed is not a raw GnuPG MPI.
-    let cert = master::certificate(&seed, "Recovery Test <test@example.org>").unwrap();
-    let fingerprint = cert.fingerprint().to_string();
-    let protected = master::protect(cert.clone(), b"integration-test-only").unwrap();
-    let export = home.0.path().join("master.asc");
-    let mut armor = Vec::new();
-    protected.as_tsk().armored().serialize(&mut armor).unwrap();
-    fs::write(&export, armor).unwrap();
-    succeeds(gpg(home.0.path(), &["--import", export.to_str().unwrap()]));
-    succeeds(gpg(
-        home.0.path(),
-        &["--quick-add-key", &fingerprint, "ed25519", "sign", "1y"],
-    ));
-    succeeds(gpg(
-        home.0.path(),
-        &["--quick-add-key", &fingerprint, "cv25519", "encr", "1y"],
-    ));
-    let keys = succeeds(gpg(
-        home.0.path(),
-        &["--with-colons", "--list-secret-keys", &fingerprint],
-    ));
-    let listing = String::from_utf8(keys.stdout).unwrap();
-    assert_eq!(listing.lines().filter(|l| l.starts_with("ssb:")).count(), 2);
-    assert!(listing.contains(&fingerprint));
-    let public = succeeds(gpg(home.0.path(), &["--export", &fingerprint]));
-    let public_file = home.0.path().join("public.pgp");
-    fs::write(&public_file, &public.stdout).unwrap();
-    let secret = backup::decode(&backup::encode(&seed)).unwrap();
-    let recovered = master::certificate(&secret, "Recovery Test <test@example.org>").unwrap();
-    assert_eq!(recovered.fingerprint(), cert.fingerprint());
-    let recovered_file = home.0.path().join("recovered.pgp");
-    let mut bytes = Vec::new();
-    recovered.as_tsk().serialize(&mut bytes).unwrap();
-    fs::write(&recovered_file, bytes).unwrap();
-    succeeds(gpg(
-        recovered_home.0.path(),
-        &["--import", recovered_file.to_str().unwrap()],
-    ));
-    succeeds(gpg(
-        recovered_home.0.path(),
-        &["--import", public_file.to_str().unwrap()],
-    ));
-    let merged = succeeds(gpg(recovered_home.0.path(), &["--export", &fingerprint]));
-    let merged = Cert::from_bytes(&merged.stdout).unwrap();
-    assert_eq!(merged.fingerprint(), cert.fingerprint());
-    assert_eq!(merged.keys().count(), 3);
-    succeeds(gpg(
-        recovered_home.0.path(),
-        &["--quick-add-key", &fingerprint, "ed25519", "auth", "1y"],
-    ));
 }

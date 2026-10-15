@@ -27,12 +27,16 @@ stdenvNoCC.mkDerivation {
     typst compile --root . --ignore-system-fonts \
       --font-path ${liberation_ttf}/share/fonts \
       paper-backup/main.typ paper-backup.pdf
+    typst compile --root . --ignore-system-fonts \
+      --font-path ${liberation_ttf}/share/fonts --input kind=raw \
+      paper-backup/main.typ paper-backup-raw.pdf
     runHook postBuild
   '';
 
   installPhase = ''
     runHook preInstall
     install -Dm644 paper-backup.pdf "$out/paper-backup.pdf"
+    install -Dm644 paper-backup-raw.pdf "$out/paper-backup-raw.pdf"
     runHook postInstall
   '';
 

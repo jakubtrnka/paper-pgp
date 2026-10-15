@@ -1,4 +1,4 @@
-"""Check the compiled recovery artifact, including every indexed word and A5 page."""
+"""Validate the actual A5 recovery artifact against the Rust scheme and wordlist."""
 import hashlib
 import re
 import subprocess
@@ -15,7 +15,14 @@ def command(*args):
     return subprocess.run(args, check=True, capture_output=True, text=True).stdout
 
 
-pdf, wordlist_path, backup_path, master_path = sys.argv[1:]
+pdf, wordlist_path, backup_path, master_path, kind = sys.argv[1:]
+require(kind in ("compact", "raw"), "Unknown backup variant")
+backup_source = Path(backup_path).read_text()
+constant = "RAW_WORD_COUNT" if kind == "raw" else "COMPACT_WORD_COUNT"
+words = int(re.search(rf"{constant}:\s*usize\s*=\s*(\d+)", backup_source)[1])
+payload = 32 if kind == "raw" else 20
+body_length = 18 + payload
+tag = 0 if kind == "raw" else 1
 info = command("pdfinfo", "-f", "1", "-l", "10000", pdf)
 count = int(re.search(r"^Pages:\s+(\d+)", info, re.MULTILINE)[1])
 require(count == 10, f"Expected 10 A5 pages, got {count}")
@@ -27,28 +34,44 @@ for width, height in sizes:
 
 text = command("pdftotext", "-layout", pdf, "-")
 pages = text.split("\f")
-for page, first in [(pages[0], 1), (pages[1], 21)]:
+first_count = (words + 1) // 2
+for page, first, end in [(pages[0], 1, first_count), (pages[1], first_count + 1, words)]:
     slots = [int(value) for value in re.findall(r"\b(\d{2})\.", page)]
-    require(slots == list(range(first, first + 20)), "Handwriting slots are missing or out of order")
+    require(slots == list(range(first, end + 1)), "Handwriting slots are missing or out of order")
+require(f"{words} words" in pages[0], "Incorrect word count on the cover")
 require("Decode the backup" in pages[2], "Seed recovery instructions moved or are missing")
 require("Restore the master key" in pages[3], "OpenPGP recovery instructions moved or are missing")
+require("BE32" in pages[3] and "Reuse this stored time" in pages[3], "Stored timestamp recovery is missing")
 
 wordlist_bytes = Path(wordlist_path).read_bytes()
 expected_words = wordlist_bytes.decode("ascii").splitlines()
 actual_words = re.findall(r"(?<!\S)([0-9]{4})[ \t]+([a-z]+)\b", "\n".join(pages[4:]))
 require(actual_words == [(f"{i:04}", word) for i, word in enumerate(expected_words)], "Indexed appendix differs from the canonical wordlist")
-
-# Check the printed parameters against the actual Rust scheme, not another copy.
-backup_source = Path(backup_path).read_text()
 expected_hash = re.search(r'WORDLIST_SHA256:\s*&str\s*=\s*"([a-f0-9]{64})"', backup_source)[1]
 require(hashlib.sha256(wordlist_bytes).hexdigest() == expected_hash, "Wordlist hash is not pinned correctly")
 compact_text = re.sub(r"\s+", "", text)
+require("else[" not in compact_text, "Typst conditional was printed as recovery instructions")
 require(expected_hash in compact_text, "Printed wordlist hash is wrong")
 checksum_domain = re.search(r'CHECKSUM_DOMAIN:.*?b"([^"\\]+)', backup_source)[1]
 require(checksum_domain in text, "Printed checksum domain is wrong")
+version = int(re.search(r"SCHEME_VERSION:\s*u8\s*=\s*(\d+)", backup_source)[1])
+for expected in [
+    f"Version{version:02x}",
+    "[13,17)Creationtimestamp:unsignedbig-endianUnixseconds",
+    f"[17,18)Tag{tag:02x}:",
+    f"[18,{body_length}){payload}bytesofsecretpayload",
+    f"[{body_length},{body_length + 5})First5bytes",
+    f"serialized_bytes[0:{body_length}]",
+]:
+    require(expected in compact_text, f"Printed binary field differs from the scheme: {expected}")
 master_source = Path(master_path).read_text()
-time = re.search(r"CREATION_TIME:\s*u64\s*=\s*([\d_]+)", master_source)[1].replace("_", "")
-require(time in text, "Printed OpenPGP timestamp is wrong")
-for parameter in ["gpg-keys/master/v1", "ed25519-certification"]:
-    require(parameter in master_source and parameter in text, f"Printed HKDF parameter differs: {parameter}")
-print(f"Verified {count} A5 pages, 40 handwriting slots, recovery parameters, and all {len(expected_words)} words")
+if kind == "compact":
+    require("final 6 bits are zero" in text, "Compact padding validation is missing")
+    for name in ["MASTER_SALT", "MASTER_INFO"]:
+        value = re.search(rf'{name}:.*?b"([^"]+)"', master_source)[1]
+        require(value in text, f"Printed HKDF parameter differs: {name}")
+    require("stored 20-byte entropy" in text, "Compact HKDF input size is wrong")
+else:
+    require("There are no padding bits" in text, "Raw padding instructions are wrong")
+    require("DonotapplyHKDF" in compact_text, "Raw recovery must explicitly bypass HKDF")
+print(f"Verified {kind}: {count} A5 pages, {words} handwriting slots, recovery parameters, and all {len(expected_words)} words")
