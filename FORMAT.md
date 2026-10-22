@@ -178,7 +178,10 @@ timestamp, packet version, or algorithm changes the fingerprint.
 
 Add the supplied UTF-8 User ID and a positive self-certification (type 0x13),
 hashed with SHA-256, created at export time, with key flags 0x01
-(certification only), primary-User-ID flag set, and no key or signature expiry.
+(certification only), primary-User-ID flag set, and no signature expiry. A key
+expiration time subpacket (type 9) is present only when requested. It holds the
+seconds from the key creation time to the expiry, where the expiry is the
+requested validity added to the signing time, and must fit in 32 bits.
 The signature time must not precede the key creation time; exports reject an
 earlier clock. Dating the self-signature at export time makes it the newest
 self-signature when the recovered certificate is merged with a saved copy, so

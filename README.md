@@ -111,6 +111,19 @@ paper. `--unprotected` is available as an explicit alternative to
 `--passphrase-file`. The export passphrase protects the exported secret key;
 it is **not** needed to recover from the words. Keep the paper confidential.
 
+The master key does not expire unless you ask for it. `--expires` takes a
+GnuPG-style validity counted from the export time: `90d`, `4w`, `18m` (30-day
+months), or `2y` (365-day years). The expiry is printed to stderr as Unix
+seconds; `date -d @SECONDS` shows the date. Expiry lives in the self-signature,
+not in the key, so it does not change the fingerprint and can be extended later
+with `gpg --quick-set-expire PRIMARY_FINGERPRINT 2y`. It stops the key from
+being trusted forever if both the paper and the revocation certificate are lost.
+
+```sh
+gpg-keys export --input words.txt --identity 'Alice <alice@example.org>' \
+  --passphrase-file passphrase.txt --expires 2y --output master.asc
+```
+
 Every input/output option defaults to `-` (stdin/stdout). Secrets never need
 to appear in command-line arguments. Input is capped at 1 MiB. New output files
 are mode 0600 on Unix, and existing files are never overwritten. Shell
@@ -199,20 +212,22 @@ gpg --homedir offline-gnupg --quick-add-key PRIMARY_FINGERPRINT cv25519 encr 1y
 
 Replace `PRIMARY_FINGERPRINT` with the actual fingerprint. GnuPG handles
 passphrase prompts and subkey creation. The primary key has certification-only
-flags and no expiration; daily signing and encryption belong on subkeys.
-Record any later expiration changes in the separately saved public certificate.
+flags and expires only if `--expires` was given; daily signing and encryption
+belong on subkeys. Record any later expiration changes in the separately saved
+public certificate.
 GnuPG's [key-management manual](https://www.gnupg.org/documentation/manuals/gnupg/OpenPGP-Key-Management.html)
 documents these commands.
 
 On recovery, type only the 35 or 44 words into a text file, validate them with
-`decode`, then use `export` again with the recorded identity. Compare the
-fingerprint with the paper and your saved public certificate before using the
-key. The stored timestamp is reused: the master fingerprint is stable across
-recovery, identity changes, export passphrases, and the current time. The
-self-signature is dated at export time, so a fresh export supersedes older
-self-signatures when merged with a saved certificate. Exported certificate
-bytes can differ because Sequoia randomizes signature salt and secret-key
-protection.
+`decode`, then use `export` again with the recorded identity and, if the key
+should keep expiring, `--expires`. Compare the fingerprint with the paper and
+your saved public certificate before using the key. The stored timestamp is
+reused: the master fingerprint is stable across recovery, identity changes,
+export passphrases, and the current time. The self-signature is dated at export
+time, so a fresh export supersedes older self-signatures when merged with a
+saved certificate, including their expiry: a recovery without `--expires` makes
+the merged certificate non-expiring. Exported certificate bytes can differ
+because Sequoia randomizes signature salt and secret-key protection.
 
 The ASCII-armored exports also parse as Sequoia certificates. GnuPG imports,
 creation of signing/encryption subkeys, and recovery followed by merging the

@@ -105,6 +105,30 @@ fn file_workflow_and_protection_for_both_variants() {
             gpg_keys::backup::timestamp(public.primary_key().key().creation_time()).unwrap(),
             backup.created_at()
         );
+        let mut args = base_args.to_vec();
+        args.extend(["--public", "--expires", "2y"]);
+        let whole_seconds = |t: SystemTime| {
+            std::time::UNIX_EPOCH
+                + std::time::Duration::from_secs(u64::from(gpg_keys::backup::timestamp(t).unwrap()))
+        };
+        let before = whole_seconds(SystemTime::now());
+        let expiring = succeeds(cli(&args));
+        let after = SystemTime::now();
+        let expiring_cert = Cert::from_bytes(&expiring.stdout).unwrap();
+        assert_eq!(expiring_cert.fingerprint(), public.fingerprint());
+        let policy = sequoia_openpgp::policy::StandardPolicy::new();
+        let expiry = expiring_cert
+            .with_policy(&policy, None)
+            .unwrap()
+            .primary_key()
+            .key_expiration_time()
+            .unwrap();
+        let two_years = std::time::Duration::from_secs(2 * 365 * 86400);
+        assert!(expiry >= before + two_years && expiry <= after + two_years);
+        assert!(String::from_utf8_lossy(&expiring.stderr).contains("expires"));
+        let mut args = base_args.to_vec();
+        args.extend(["--public", "--expires", "2x"]);
+        assert!(!cli(&args).status.success());
         let password = dir.path().join("password");
         fs::write(&password, "test password\r\n").unwrap();
         let mut args = base_args.to_vec();
@@ -148,7 +172,7 @@ fn file_workflow_and_protection_for_both_variants() {
             master::ed25519_seed(backup.secret()).as_ref()
         );
         assert_eq!(
-            master::certificate(&raw_backup, "Recovered", SystemTime::now())
+            master::certificate(&raw_backup, "Recovered", SystemTime::now(), None)
                 .unwrap()
                 .fingerprint(),
             public.fingerprint()
@@ -308,6 +332,7 @@ fn gpg_import_add_subkeys_and_recover() {
             &backup,
             "Recovery Test <test@example.org>",
             SystemTime::now(),
+            None,
         )
         .unwrap();
         let fingerprint = cert.fingerprint().to_string();
@@ -347,6 +372,7 @@ fn gpg_import_add_subkeys_and_recover() {
             &Backup::decode(&raw.encode()).unwrap(),
             "Native recovery",
             SystemTime::now(),
+            None,
         )
         .unwrap();
         assert_eq!(native_recovery.fingerprint(), cert.fingerprint());
@@ -354,6 +380,7 @@ fn gpg_import_add_subkeys_and_recover() {
             &Backup::decode(&backup.encode()).unwrap(),
             "Recovery Test <test@example.org>",
             SystemTime::now(),
+            None,
         )
         .unwrap();
         assert_eq!(recovered.fingerprint(), cert.fingerprint());
