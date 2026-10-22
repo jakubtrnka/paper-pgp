@@ -177,8 +177,12 @@ the fingerprint, independently of the SHA-256 backup checksum. Changing the
 timestamp, packet version, or algorithm changes the fingerprint.
 
 Add the supplied UTF-8 User ID and a positive self-certification (type 0x13),
-hashed with SHA-256, created at the stored timestamp, with key flags 0x01
+hashed with SHA-256, created at export time, with key flags 0x01
 (certification only), primary-User-ID flag set, and no key or signature expiry.
+The signature time must not precede the key creation time; exports reject an
+earlier clock. Dating the self-signature at export time makes it the newest
+self-signature when the recovered certificate is merged with a saved copy, so
+OpenPGP implementations apply its metadata unambiguously.
 Preferred hashes are SHA-512, SHA-256; preferred symmetric algorithms are
 AES-256, AES-128. Identity must be nonempty and contain no control characters.
 Use an OpenPGP library to construct and sign these packets.

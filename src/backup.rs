@@ -151,6 +151,9 @@ impl Backup {
     pub fn created_at(&self) -> u32 {
         self.created_at
     }
+    pub fn creation_time(&self) -> SystemTime {
+        UNIX_EPOCH + std::time::Duration::from_secs(u64::from(self.created_at))
+    }
     pub fn secret(&self) -> &BackupSecret {
         &self.secret
     }

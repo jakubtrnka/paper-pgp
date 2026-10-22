@@ -8,6 +8,7 @@ use sequoia_openpgp::serialize::Serialize;
 use std::{
     fs::{File, OpenOptions},
     io::{self, Read, Write},
+    time::SystemTime,
 };
 use zeroize::Zeroizing;
 
@@ -270,7 +271,8 @@ fn run() -> Result<()> {
             metadata(&backup);
             eprintln!(
                 "Primary fingerprint: {}",
-                master::certificate(&backup, "Imported master key")?.fingerprint()
+                master::certificate(&backup, "Imported master key", backup.creation_time())?
+                    .fingerprint()
             );
         }
         Command::Export {
@@ -284,7 +286,7 @@ fn run() -> Result<()> {
             separate_stdin(&input, &passphrase_file)?;
             let bytes = read_input(&input.input)?;
             let backup = Backup::decode(text(&bytes)?)?;
-            let mut cert = master::certificate(&backup, &identity)?;
+            let mut cert = master::certificate(&backup, &identity, SystemTime::now())?;
             if let Some(path) = passphrase_file {
                 cert = master::protect(cert, &read_password(&path)?)?;
             } else if unprotected {
