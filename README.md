@@ -206,15 +206,19 @@ Use a dedicated offline GnuPG home for the certification master:
 ```sh
 mkdir -m 700 offline-gnupg
 gpg --homedir offline-gnupg --import master.asc
+echo "PRIMARY_FINGERPRINT:6:" | gpg --homedir offline-gnupg --import-ownertrust
 gpg --homedir offline-gnupg --quick-add-key PRIMARY_FINGERPRINT ed25519 sign 1y
 gpg --homedir offline-gnupg --quick-add-key PRIMARY_FINGERPRINT cv25519 encr 1y
 ```
 
-Replace `PRIMARY_FINGERPRINT` with the actual fingerprint. GnuPG handles
-passphrase prompts and subkey creation. The primary key has certification-only
-flags and expires only if `--expires` was given; daily signing and encryption
-belong on subkeys. Record any later expiration changes in the separately saved
-public certificate.
+Replace `PRIMARY_FINGERPRINT` with the actual fingerprint. Importing a secret
+key does not mark it as yours: without the ownertrust line GnuPG lists the key
+as `unknown` and may warn that it is not certified. Ownertrust is a local
+setting in `trustdb.gpg`, not part of the certificate, so repeat it in every
+new GnuPG home. GnuPG handles passphrase prompts and subkey creation. The
+primary key has certification-only flags and expires only if `--expires` was
+given; daily signing and encryption belong on subkeys. Record any later
+expiration changes in the separately saved public certificate.
 GnuPG's [key-management manual](https://www.gnupg.org/documentation/manuals/gnupg/OpenPGP-Key-Management.html)
 documents these commands.
 
