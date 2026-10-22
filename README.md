@@ -208,9 +208,11 @@ On recovery, type only the 35 or 44 words into a text file, validate them with
 `decode`, then use `export` again with the recorded identity. Compare the
 fingerprint with the paper and your saved public certificate before using the
 key. The stored timestamp is reused: the master fingerprint is stable across
-recovery, identity changes, export passphrases, and the current time. Exported
-certificate bytes can differ because Sequoia randomizes signature salt and
-secret-key protection.
+recovery, identity changes, export passphrases, and the current time. The
+self-signature is dated at export time, so a fresh export supersedes older
+self-signatures when merged with a saved certificate. Exported certificate
+bytes can differ because Sequoia randomizes signature salt and secret-key
+protection.
 
 The ASCII-armored exports also parse as Sequoia certificates. GnuPG imports,
 creation of signing/encryption subkeys, and recovery followed by merging the

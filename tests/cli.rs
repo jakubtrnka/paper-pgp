@@ -148,7 +148,7 @@ fn file_workflow_and_protection_for_both_variants() {
             master::ed25519_seed(backup.secret()).as_ref()
         );
         assert_eq!(
-            master::certificate(&raw_backup, "Recovered")
+            master::certificate(&raw_backup, "Recovered", SystemTime::now())
                 .unwrap()
                 .fingerprint(),
             public.fingerprint()
@@ -304,7 +304,12 @@ fn gpg_import_add_subkeys_and_recover() {
             }
         };
         let backup = Backup::new(secret, 1234567890);
-        let cert = master::certificate(&backup, "Recovery Test <test@example.org>").unwrap();
+        let cert = master::certificate(
+            &backup,
+            "Recovery Test <test@example.org>",
+            SystemTime::now(),
+        )
+        .unwrap();
         let fingerprint = cert.fingerprint().to_string();
         let protected = master::protect(cert.clone(), b"integration-test-only").unwrap();
         let export = home.0.path().join("master.asc");
@@ -338,13 +343,17 @@ fn gpg_import_add_subkeys_and_recover() {
         let raw = master::import(&secret_export.stdout, Some(b"integration-test-only")).unwrap();
         assert_eq!(raw.kind(), SecretKind::Raw);
         assert_eq!(raw.created_at(), backup.created_at());
-        let native_recovery =
-            master::certificate(&Backup::decode(&raw.encode()).unwrap(), "Native recovery")
-                .unwrap();
+        let native_recovery = master::certificate(
+            &Backup::decode(&raw.encode()).unwrap(),
+            "Native recovery",
+            SystemTime::now(),
+        )
+        .unwrap();
         assert_eq!(native_recovery.fingerprint(), cert.fingerprint());
         let recovered = master::certificate(
             &Backup::decode(&backup.encode()).unwrap(),
             "Recovery Test <test@example.org>",
+            SystemTime::now(),
         )
         .unwrap();
         assert_eq!(recovered.fingerprint(), cert.fingerprint());
