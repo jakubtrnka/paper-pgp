@@ -183,9 +183,11 @@ expiration time subpacket (type 9) is present only when requested. It holds the
 seconds from the key creation time to the expiry, where the expiry is the
 requested validity added to the signing time, and must fit in 32 bits.
 The signature time must not precede the key creation time; exports reject an
-earlier clock. Dating the self-signature at export time makes it the newest
-self-signature when the recovered certificate is merged with a saved copy, so
-OpenPGP implementations apply its metadata unambiguously.
+earlier clock. Use current export time for the fresh self-signature, preserving
+the stored creation time only in the primary-key packet. This does not guarantee
+that the fresh signature becomes active when merged with a saved certificate:
+equal-second timestamps, clock rollback, or existing future-dated signatures
+can affect selection. Check the effective metadata after merging.
 Preferred hashes are SHA-512, SHA-256; preferred symmetric algorithms are
 AES-256, AES-128. Identity must be nonempty and contain no control characters.
 Use an OpenPGP library to construct and sign these packets.
@@ -217,10 +219,14 @@ parser and decryption.
 
 The backup deliberately contains only the primary secret and its timestamp.
 Imported primary capabilities, User IDs, expirations, revocations, third-party
-certifications, and subkey bindings remain in the public certificate. Recovery
-initially creates the certification-only certificate described above; **save
-and merge the original public certificate** to retain its original metadata.
-Never discard revocations when reconstructing a usable certificate.
+certifications, and subkey bindings remain in the public certificate. Export
+creates a fresh certification-only certificate and certifies the supplied User
+ID anew. **Save and merge the original public certificate** to retain its
+packets, including revocations and subkey bindings. Their presence does not
+guarantee preservation of the original effective policy: a fresh certification
+can change capabilities and expiry or reactivate a revoked User ID. This does
+not undo a compromised-primary-key revocation. Verify effective metadata before
+using or publishing the merged certificate.
 
 Private subkeys require separate backups. The master seed cannot recreate their
 private material or decrypt messages encrypted to lost encryption subkeys.

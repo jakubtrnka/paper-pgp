@@ -4,7 +4,7 @@ use gpg_keys::{
     backup::{self, Backup, BackupSecret, SecretKind},
     master, paper,
 };
-use sequoia_openpgp::serialize::Serialize;
+use sequoia_openpgp::serialize::SerializeInto;
 use std::{
     fs::{File, OpenOptions},
     io::{self, Read, Write},
@@ -111,11 +111,11 @@ enum Command {
         #[command(flatten)]
         output: Output,
     },
-    /// Restore a certification-only Ed25519 master key as ASCII-armored OpenPGP.
+    /// Export a fresh certification-only certificate from the recovered master key.
     Export {
         #[command(flatten)]
         input: Input,
-        /// Full User ID, e.g. 'Alice <alice@example.org>'.
+        /// User ID to certify anew, e.g. 'Alice <alice@example.org>'.
         #[arg(long)]
         identity: String,
         /// File with an export passphrase (one final LF or CRLF is removed).
@@ -148,14 +148,25 @@ enum Command {
 }
 
 fn read_input(path: &str) -> Result<Zeroizing<Vec<u8>>> {
-    let mut bytes = Zeroizing::new(Vec::new());
-    let reader: Box<dyn Read> = if path == "-" {
+    const LIMIT: usize = 1024 * 1024;
+    // Fixed storage also holds the byte used to detect an oversized input.
+    let mut bytes = Zeroizing::new(vec![0; LIMIT + 1]);
+    let mut reader: Box<dyn Read> = if path == "-" {
         Box::new(io::stdin())
     } else {
         Box::new(File::open(path).with_context(|| format!("cannot open {path}"))?)
     };
-    reader.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= 1024 * 1024, "input exceeds 1 MiB limit");
+    let mut length = 0;
+    while length < bytes.len() {
+        match reader.read(&mut bytes[length..]) {
+            Ok(0) => break,
+            Ok(count) => length += count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    ensure!(length <= LIMIT, "input exceeds 1 MiB limit");
+    bytes.truncate(length);
     Ok(bytes)
 }
 
@@ -224,6 +235,14 @@ fn separate_stdin(input: &Input, password: &Option<String>) -> Result<()> {
     Ok(())
 }
 
+fn serialize_secret(value: &impl SerializeInto) -> Result<Zeroizing<Vec<u8>>> {
+    // The library provides an upper bound; a slice writer cannot reallocate.
+    let mut bytes = Zeroizing::new(vec![0; SerializeInto::serialized_len(value)]);
+    let length = SerializeInto::serialize_into(value, &mut bytes)?;
+    bytes.truncate(length);
+    Ok(bytes)
+}
+
 fn run() -> Result<()> {
     match Cli::parse().command {
         Command::Random { creation, output } => store_new(backup::random()?, creation, output)?,
@@ -256,9 +275,10 @@ fn run() -> Result<()> {
         Command::Decode { input, output } => {
             let bytes = read_input(&input.input)?;
             let backup = Backup::decode(text(&bytes)?)?;
-            let mut result = Zeroizing::new(hex::encode(backup.secret().payload()));
-            result.push('\n');
-            write_output(&output.output, result.as_bytes())?;
+            let hex_len = backup.secret().payload().len() * 2;
+            let mut result = Zeroizing::new(vec![b'\n'; hex_len + 1]);
+            hex::encode_to_slice(backup.secret().payload(), &mut result[..hex_len])?;
+            write_output(&output.output, &result)?;
             metadata(&backup);
         }
         Command::Import {
@@ -270,13 +290,10 @@ fn run() -> Result<()> {
             let bytes = read_input(&input.input)?;
             let password = passphrase_file.as_deref().map(read_password).transpose()?;
             let backup = master::import(&bytes, password.as_ref().map(|p| p.as_slice()))?;
+            let fingerprint = master::primary_key(&backup)?.fingerprint();
             write_output(&output.output, backup.encode().as_bytes())?;
             metadata(&backup);
-            eprintln!(
-                "Primary fingerprint: {}",
-                master::certificate(&backup, "Imported master key", backup.creation_time(), None)?
-                    .fingerprint()
-            );
+            eprintln!("Primary fingerprint: {fingerprint}");
         }
         Command::Export {
             input,
@@ -293,23 +310,28 @@ fn run() -> Result<()> {
             // OpenPGP stores whole seconds; truncate so printed and stored times agree.
             let now =
                 UNIX_EPOCH + Duration::from_secs(u64::from(backup::timestamp(SystemTime::now())?));
-            let expires_at = expires.map(|validity| now + validity);
+            let expires_at = expires
+                .map(|validity| now.checked_add(validity).context("expiry is out of range"))
+                .transpose()?;
+            // Expiry is a relative u32 period and may extend beyond Unix u32 time.
+            let expiry_seconds = expires_at
+                .map(|at| at.duration_since(UNIX_EPOCH).map(|d| d.as_secs()))
+                .transpose()?;
             let mut cert = master::certificate(&backup, &identity, now, expires_at)?;
             if let Some(path) = passphrase_file {
                 cert = master::protect(cert, &read_password(&path)?)?;
             } else if unprotected {
                 eprintln!("WARNING: exporting an unprotected secret master key.");
             }
-            let mut result = Zeroizing::new(Vec::new());
-            if public {
-                cert.armored().serialize(&mut *result)?;
+            let result = if public {
+                serialize_secret(&cert.armored())?
             } else {
-                cert.as_tsk().armored().serialize(&mut *result)?;
-            }
+                serialize_secret(&cert.as_tsk().armored())?
+            };
             write_output(&output.output, &result)?;
             eprintln!("Primary fingerprint: {}", cert.fingerprint());
-            match expires_at {
-                Some(at) => eprintln!("Key expires: {} (Unix seconds)", backup::timestamp(at)?),
+            match expiry_seconds {
+                Some(seconds) => eprintln!("Key expires: {seconds} (Unix seconds)"),
                 None => eprintln!("Key expires: never"),
             }
         }

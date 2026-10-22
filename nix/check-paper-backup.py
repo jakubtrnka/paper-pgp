@@ -42,6 +42,13 @@ require(f"{words} words" in pages[0], "Incorrect word count on the cover")
 require("Decode the backup" in pages[2], "Seed recovery instructions moved or are missing")
 require("Restore the master key" in pages[3], "OpenPGP recovery instructions moved or are missing")
 require("BE32" in pages[3] and "Reuse this stored time" in pages[3], "Stored timestamp recovery is missing")
+recovery_text = re.sub(r"\s+", " ", pages[3])
+require(
+    re.search(r"Self-certify.*?current export time, certification-only flags", recovery_text),
+    "Self-certification must use current export time, not the stored key timestamp",
+)
+require("Recovery certifies the written User ID anew" in recovery_text, "Fresh certification semantics are missing")
+require("fresh signatures can reactivate retired User IDs" in recovery_text, "Certificate merge caveat is missing")
 
 wordlist_bytes = Path(wordlist_path).read_bytes()
 expected_words = wordlist_bytes.decode("ascii").splitlines()

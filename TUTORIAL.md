@@ -272,13 +272,15 @@ Alice practices recovery before she depends on the backup:
 
 1. She types the words from paper into a file and follows the
    [README's recovery example](README.md#recover-from-paper) to export
-   `recovered-primary.asc`, using her recorded User ID.
+   `recovered-primary.asc`, using a User ID she intends to certify now.
+   She checks that the identity recorded on paper is still appropriate.
 2. She compares the printed fingerprint with the paper and her saved public
    certificate. They must identify the same primary key.
 3. She imports the recovered primary and the saved public certificate into
    a fresh offline GnuPG home.
 4. She restores any separately backed-up private subkeys and ownertrust,
-   then checks the resulting identities, expiry, and subkeys before use.
+   then checks the resulting identities, capabilities, expiry, revocations,
+   and subkeys before use.
 
 The import in step 3 is:
 
@@ -287,12 +289,20 @@ mkdir -m 700 recovered-gnupg
 gpg --homedir recovered-gnupg --import recovered-primary.asc alice-public.asc
 ```
 
-Recovery creates a fresh self-signature for the supplied User ID. Its
-metadata can supersede the older self-signature when the certificates are
-merged. **If Alice wants the primary to keep expiring, she passes `--expires`
-again during recovery.** Merging the saved certificate alone does not undo
-the new export's expiry choice. She also retains all saved revocations;
-recovering a secret is not a reason to discard them.
+Recovery keeps the original creation time in the primary-key packet and
+creates a fresh self-signature dated at export time. This certifies the
+supplied User ID anew. Merging the saved public certificate retains its
+packets, including revocations and subkey bindings, but the fresh
+certification can reactivate a retired User ID or replace earlier capability
+and expiry settings. It does not undo a compromised-primary-key revocation.
+
+**If Alice wants the fresh certificate to expire, she passes `--expires`
+again during recovery.** If the new self-signature becomes active after
+merging, its settings apply, including no expiry when that option is omitted.
+It is not guaranteed to take precedence: signatures made in the same second,
+a clock that has moved backwards, or existing future-dated signatures can
+affect selection. Alice checks the merged certificate and uses GnuPG's
+key-management commands to make deliberate changes to its settings.
 
 With her primary restored, Alice can authorize new subkeys. To decrypt old
 messages, she still needs the original private encryption subkey. Its public
@@ -307,6 +317,15 @@ see the [printable booklet](paper-backup/README.md).
 The details below explain how the relationships above are represented.
 They are optional for following Alice's setup. The packet and fingerprint
 examples describe the version 4 keys produced by this project.
+
+### Secret handling
+
+The application wipes its secret buffers and Argon2 workspace when dropped.
+It allocates input/output buffers before filling them to avoid leaving
+unwiped copies when those buffers grow. This is best-effort cleanup:
+temporary stack or library copies, I/O buffers, terminal scrollback, swap,
+and process snapshots can retain secrets. Alice still protects her files
+and the machine on which she generates or recovers keys.
 
 ### The primary-key packet and fingerprint
 

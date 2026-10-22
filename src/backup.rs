@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail, ensure};
-use argon2::{Algorithm, Argon2, Params, Version};
+use argon2::{Algorithm, Argon2, Block, Params, Version};
 use sha2::{Digest, Sha256};
 use std::{
     fmt,
@@ -259,7 +259,12 @@ pub fn random() -> Result<BackupSecret> {
 }
 
 fn compact(input: &str) -> Zeroizing<String> {
-    Zeroizing::new(input.chars().filter(|c| !c.is_ascii_whitespace()).collect())
+    // Reserve before copying secrets: reallocations would leave unwiped copies.
+    let mut result = Zeroizing::new(String::with_capacity(input.len()));
+    for c in input.chars().filter(|c| !c.is_ascii_whitespace()) {
+        result.push(c);
+    }
+    result
 }
 
 fn binary_bytes(input: &str) -> Result<Zeroizing<Vec<u8>>> {
@@ -272,14 +277,11 @@ fn binary_bytes(input: &str) -> Result<Zeroizing<Vec<u8>>> {
         bits.bytes().all(|b| b == b'0' || b == b'1'),
         "binary input must contain only 0, 1, and ASCII whitespace"
     );
-    Ok(Zeroizing::new(
-        bits.as_bytes()
-            .as_chunks::<8>()
-            .0
-            .iter()
-            .map(|chunk| chunk.iter().fold(0, |byte, bit| (byte << 1) | (bit - b'0')))
-            .collect(),
-    ))
+    let mut bytes = Zeroizing::new(vec![0; bits.len() / 8]);
+    for (byte, chunk) in bytes.iter_mut().zip(bits.as_bytes().as_chunks::<8>().0) {
+        *byte = chunk.iter().fold(0, |byte, bit| (byte << 1) | (bit - b'0'));
+    }
+    Ok(bytes)
 }
 
 pub fn parse_exact(input: &str, binary: bool, kind: SecretKind) -> Result<BackupSecret> {
@@ -315,9 +317,11 @@ pub fn derive(input: &str) -> Result<BackupSecret> {
     );
     let salt = Sha256::digest(ENTROPY_DOMAIN);
     let params = Params::new(65536, 3, 1, Some(20))?;
+    // Argon2's allocating API does not wipe its workspace on drop.
+    let mut memory = Zeroizing::new(vec![Block::default(); params.block_count()]);
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut secret = Zeroizing::new([0; 20]);
-    argon.hash_password_into(&entropy, &salt[..16], secret.as_mut())?;
+    argon.hash_password_into_with_memory(&entropy, &salt[..16], secret.as_mut(), &mut *memory)?;
     Ok(BackupSecret::CompactEntropy(secret))
 }
 
@@ -333,7 +337,9 @@ fn checksum(body: &[u8]) -> [u8; CHECKSUM_LEN] {
 fn encode_bytes(bytes: &[u8]) -> Zeroizing<String> {
     let words: Vec<_> = WORDLIST.lines().collect();
     let count = (bytes.len() * 8).div_ceil(10);
-    let mut result = Zeroizing::new(String::new());
+    let max_word_len = words.iter().map(|word| word.len()).max().unwrap();
+    // One separator per word includes the final newline.
+    let mut result = Zeroizing::new(String::with_capacity(count * (max_word_len + 1)));
     for word in 0..count {
         let mut index = 0;
         for bit in word * 10..word * 10 + 10 {

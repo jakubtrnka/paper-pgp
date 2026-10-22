@@ -138,7 +138,7 @@
     - Public MPI: `0x40` followed by the 32-byte Ed25519 public key; bit length 263.
       Secret MPI: native seed as a big-endian integer; restore its leading zero bytes.
     - Self-certify the written UTF-8 User ID: positive certification (`0x13`), SHA-256,
-      the stored timestamp, certification-only flags (`0x01`), primary User ID, no expiry.
+      current export time, certification-only flags (`0x01`), primary User ID, no expiry.
       Preferences: SHA-512, SHA-256; AES-256, AES-128.
 
     == Fingerprint and certificate
@@ -146,9 +146,9 @@
     the public-key packet body, then that body (including the timestamp).
     Compare it with page 1. User IDs and export passphrases do not affect it.
 
-    Import into GnuPG or Sequoia and merge the saved public certificate to retain
-    subkey bindings, original capabilities, later identities, expiration updates,
-    and revocations. Recovering the master does not recreate the full original certificate.
+    Recovery certifies the written User ID anew. Merge the saved public certificate
+    to retain its packets. Check effective identities, capabilities, expiry, and
+    revocations: fresh signatures can reactivate retired User IDs or replace earlier settings.
 
     *Back up private subkeys separately:* the master cannot recreate them or decrypt
     messages encrypted to lost subkeys. The checksum detects damage, not malicious changes.
