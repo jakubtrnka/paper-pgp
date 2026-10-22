@@ -15,7 +15,11 @@ use pgp::{
     },
 };
 use sequoia_openpgp as pgp;
-use std::{cmp::Ordering, io::Read, time::SystemTime};
+use std::{
+    cmp::Ordering,
+    io::Read,
+    time::{Duration, SystemTime},
+};
 use zeroize::Zeroizing;
 
 pub const MASTER_SALT: &[u8] = b"gpg-keys/master/v1";
@@ -36,8 +40,14 @@ pub fn ed25519_seed(secret: &BackupSecret) -> Zeroizing<[u8; 32]> {
 
 /// The native private seed and stored packet timestamp reproduce the fingerprint.
 /// The self-signature is dated `signed_at` so a fresh export supersedes older
-/// self-signatures when merged with a saved certificate.
-pub fn certificate(backup: &Backup, identity: &str, signed_at: SystemTime) -> Result<Cert> {
+/// self-signatures when merged with a saved certificate. `expires_at` sets the
+/// key expiration subpacket, stored relative to the key creation time.
+pub fn certificate(
+    backup: &Backup,
+    identity: &str,
+    signed_at: SystemTime,
+    expires_at: Option<SystemTime>,
+) -> Result<Cert> {
     ensure!(
         !identity.trim().is_empty() && !identity.chars().any(char::is_control),
         "identity must be nonempty and contain no control characters"
@@ -47,6 +57,20 @@ pub fn certificate(backup: &Backup, identity: &str, signed_at: SystemTime) -> Re
         signed_at >= time,
         "signing time precedes the key creation time; check the system clock or --created-at"
     );
+    let validity_period = expires_at
+        .map(|expires| {
+            ensure!(
+                expires > signed_at,
+                "expiry must be later than the signing time"
+            );
+            let period = expires.duration_since(time)?;
+            ensure!(
+                u32::try_from(period.as_secs()).is_ok(),
+                "expiry exceeds the OpenPGP 32-bit validity period"
+            );
+            Ok(period)
+        })
+        .transpose()?;
     let seed = ed25519_seed(backup.secret());
     let key: Key<SecretParts, PrimaryRole> =
         pgp::packet::key::Key4::import_secret_ed25519(seed.as_ref(), time)?.into();
@@ -57,6 +81,7 @@ pub fn certificate(backup: &Backup, identity: &str, signed_at: SystemTime) -> Re
         .set_signature_creation_time(signed_at)?
         .set_key_flags(KeyFlags::empty().set_certification())?
         .set_primary_userid(true)?
+        .set_key_validity_period(validity_period)?
         .set_preferred_hash_algorithms(vec![HashAlgorithm::SHA512, HashAlgorithm::SHA256])?
         .set_preferred_symmetric_algorithms(vec![
             SymmetricAlgorithm::AES256,
@@ -71,6 +96,28 @@ pub fn certificate(backup: &Backup, identity: &str, signed_at: SystemTime) -> Re
         ]
         .into_iter(),
     )
+}
+
+/// Parse a GnuPG-style validity duration: `<n>d`, `<n>w`, `<n>m` (30 days), `<n>y` (365 days).
+pub fn validity(text: &str) -> Result<Duration> {
+    let (digits, unit) = text.split_at(text.len().saturating_sub(1));
+    let days: u64 = match unit {
+        "d" => 1,
+        "w" => 7,
+        "m" => 30,
+        "y" => 365,
+        _ => bail!("validity must end with d, w, m, or y, e.g. 2y"),
+    };
+    ensure!(
+        !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()),
+        "validity must be a positive whole number followed by d, w, m, or y"
+    );
+    let count: u64 = digits.parse().context("validity count is too large")?;
+    ensure!(count > 0, "validity must be positive");
+    let secs = count
+        .checked_mul(days * 86400)
+        .context("validity is too large")?;
+    Ok(Duration::from_secs(secs))
 }
 
 /// Import exactly one certificate's exportable v4/algorithm-22 Ed25519 primary
@@ -131,7 +178,7 @@ pub fn import(input: &[u8], passphrase: Option<&[u8]>) -> Result<Backup> {
     let backup = Backup::new(secret, created_at);
     // Reject mismatched private/public material before producing a backup.
     // Only the fingerprint matters here, so stay independent of the clock.
-    let recovered = certificate(&backup, "Imported master key", backup.creation_time())?;
+    let recovered = certificate(&backup, "Imported master key", backup.creation_time(), None)?;
     ensure!(
         recovered.fingerprint() == cert.fingerprint(),
         "private material does not reproduce the imported primary fingerprint"
@@ -228,7 +275,7 @@ mod tests {
         policy::StandardPolicy,
         serialize::Serialize,
     };
-    use std::time::{Duration, UNIX_EPOCH};
+    use std::time::UNIX_EPOCH;
 
     fn creation(backup: &Backup) -> SystemTime {
         backup.creation_time()
@@ -247,7 +294,8 @@ mod tests {
             let v: Vec<_> = line.split('\t').collect();
             let backup = Backup::decode(v[4]).unwrap();
             assert_eq!(hex::encode(ed25519_seed(backup.secret()).as_ref()), v[5]);
-            let cert = certificate(&backup, "Independent test vector", creation(&backup)).unwrap();
+            let cert =
+                certificate(&backup, "Independent test vector", creation(&backup), None).unwrap();
             assert_eq!(cert.fingerprint().to_string(), v[6]);
         }
     }
@@ -255,17 +303,24 @@ mod tests {
     #[test]
     fn recovery_timestamp_and_passphrase_protection() {
         let backup = example();
-        let cert = certificate(&backup, "Alice <alice@example.org>", creation(&backup)).unwrap();
+        let cert = certificate(
+            &backup,
+            "Alice <alice@example.org>",
+            creation(&backup),
+            None,
+        )
+        .unwrap();
         let recovered = certificate(
             &Backup::decode(&backup.encode()).unwrap(),
             "Alice <alice@example.org>",
             creation(&backup),
+            None,
         )
         .unwrap();
         assert_eq!(cert.fingerprint(), recovered.fingerprint());
         assert_eq!(
             cert.fingerprint(),
-            certificate(&backup, "Different identity", creation(&backup))
+            certificate(&backup, "Different identity", creation(&backup), None)
                 .unwrap()
                 .fingerprint()
         );
@@ -279,7 +334,7 @@ mod tests {
         );
         assert_ne!(
             cert.fingerprint(),
-            certificate(&changed_time, "Alice", creation(&changed_time))
+            certificate(&changed_time, "Alice", creation(&changed_time), None)
                 .unwrap()
                 .fingerprint()
         );
@@ -289,7 +344,7 @@ mod tests {
         );
         assert_eq!(
             cert.fingerprint(),
-            certificate(&native, "Alice", creation(&native))
+            certificate(&native, "Alice", creation(&native), None)
                 .unwrap()
                 .fingerprint()
         );
@@ -319,7 +374,7 @@ mod tests {
                 .into_keypair()
                 .is_ok()
         );
-        assert!(certificate(&backup, "\n", creation(&backup)).is_err());
+        assert!(certificate(&backup, "\n", creation(&backup), None).is_err());
     }
 
     #[test]
@@ -328,18 +383,56 @@ mod tests {
         let created = backup.creation_time();
         assert_eq!(created, UNIX_EPOCH + Duration::from_secs(1700000000));
         let signed_at = created + Duration::from_secs(365 * 24 * 3600);
-        let cert = certificate(&backup, "Alice", signed_at).unwrap();
+        let cert = certificate(&backup, "Alice", signed_at, None).unwrap();
         let policy = StandardPolicy::new();
         let valid = cert.with_policy(&policy, signed_at).unwrap();
         let binding = valid.primary_userid().unwrap().binding_signature();
         assert_eq!(binding.signature_creation_time(), Some(signed_at));
         assert_eq!(
             cert.fingerprint(),
-            certificate(&backup, "Alice", created)
+            certificate(&backup, "Alice", created, None)
                 .unwrap()
                 .fingerprint()
         );
-        assert!(certificate(&backup, "Alice", created - Duration::from_secs(1)).is_err());
+        assert!(certificate(&backup, "Alice", created - Duration::from_secs(1), None).is_err());
+    }
+
+    #[test]
+    fn self_signature_carries_optional_expiry() {
+        let backup = example();
+        let signed_at = backup.creation_time() + Duration::from_secs(86400);
+        let expires_at = signed_at + Duration::from_secs(2 * 365 * 86400);
+        let cert = certificate(&backup, "Alice", signed_at, Some(expires_at)).unwrap();
+        let policy = StandardPolicy::new();
+        let valid = cert.with_policy(&policy, signed_at).unwrap();
+        assert!(valid.primary_key().alive().is_ok());
+        assert_eq!(valid.primary_key().key_expiration_time(), Some(expires_at));
+        let later = cert
+            .with_policy(&policy, expires_at + Duration::from_secs(1))
+            .unwrap();
+        assert!(later.primary_key().alive().is_err());
+        let unlimited = certificate(&backup, "Alice", signed_at, None).unwrap();
+        assert_eq!(cert.fingerprint(), unlimited.fingerprint());
+        let unlimited = unlimited.with_policy(&policy, signed_at).unwrap();
+        assert_eq!(unlimited.primary_key().key_expiration_time(), None);
+        assert!(certificate(&backup, "Alice", signed_at, Some(signed_at)).is_err());
+    }
+
+    #[test]
+    fn validity_durations_follow_gnupg_units() {
+        assert_eq!(
+            validity("2y").unwrap(),
+            Duration::from_secs(2 * 365 * 86400)
+        );
+        assert_eq!(
+            validity("18m").unwrap(),
+            Duration::from_secs(18 * 30 * 86400)
+        );
+        assert_eq!(validity("4w").unwrap(), Duration::from_secs(4 * 7 * 86400));
+        assert_eq!(validity("90d").unwrap(), Duration::from_secs(90 * 86400));
+        for bad in ["", "2", "0d", "2x", "y", "-1d", " 2y", "1y1d"] {
+            assert!(validity(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
@@ -348,7 +441,7 @@ mod tests {
         seed[0] = 0;
         seed[1] = 0;
         let original = Backup::new(BackupSecret::Raw(seed), 1234567890);
-        let cert = certificate(&original, "Original", creation(&original)).unwrap();
+        let cert = certificate(&original, "Original", creation(&original), None).unwrap();
         for password in [None, Some(&b"test password"[..])] {
             let exported = if let Some(p) = password {
                 protect(cert.clone(), p).unwrap()
@@ -369,7 +462,8 @@ mod tests {
                 certificate(
                     &Backup::decode(&backup.encode()).unwrap(),
                     "Restored",
-                    creation(&backup)
+                    creation(&backup),
+                    None,
                 )
                 .unwrap()
                 .fingerprint()
@@ -463,7 +557,7 @@ mod tests {
             let mut seed = Zeroizing::new([42; 32]);
             seed[..zeros].fill(0);
             let original = Backup::new(BackupSecret::Raw(seed), 1234567890);
-            let cert = certificate(&original, "Original", creation(&original)).unwrap();
+            let cert = certificate(&original, "Original", creation(&original), None).unwrap();
             for payload in [
                 original.secret().payload(),
                 &original.secret().payload()[zeros..],

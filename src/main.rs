@@ -8,7 +8,7 @@ use sequoia_openpgp::serialize::Serialize;
 use std::{
     fs::{File, OpenOptions},
     io::{self, Read, Write},
-    time::SystemTime,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use zeroize::Zeroizing;
 
@@ -127,6 +127,9 @@ enum Command {
         /// Export only the public certificate.
         #[arg(long)]
         public: bool,
+        /// Key validity from now, GnuPG style: <n>d, <n>w, <n>m (30 days), or <n>y (365 days).
+        #[arg(long, value_parser = master::validity)]
+        expires: Option<Duration>,
         #[command(flatten)]
         output: Output,
     },
@@ -271,7 +274,7 @@ fn run() -> Result<()> {
             metadata(&backup);
             eprintln!(
                 "Primary fingerprint: {}",
-                master::certificate(&backup, "Imported master key", backup.creation_time())?
+                master::certificate(&backup, "Imported master key", backup.creation_time(), None)?
                     .fingerprint()
             );
         }
@@ -281,12 +284,17 @@ fn run() -> Result<()> {
             passphrase_file,
             unprotected,
             public,
+            expires,
             output,
         } => {
             separate_stdin(&input, &passphrase_file)?;
             let bytes = read_input(&input.input)?;
             let backup = Backup::decode(text(&bytes)?)?;
-            let mut cert = master::certificate(&backup, &identity, SystemTime::now())?;
+            // OpenPGP stores whole seconds; truncate so printed and stored times agree.
+            let now =
+                UNIX_EPOCH + Duration::from_secs(u64::from(backup::timestamp(SystemTime::now())?));
+            let expires_at = expires.map(|validity| now + validity);
+            let mut cert = master::certificate(&backup, &identity, now, expires_at)?;
             if let Some(path) = passphrase_file {
                 cert = master::protect(cert, &read_password(&path)?)?;
             } else if unprotected {
@@ -300,6 +308,10 @@ fn run() -> Result<()> {
             }
             write_output(&output.output, &result)?;
             eprintln!("Primary fingerprint: {}", cert.fingerprint());
+            match expires_at {
+                Some(at) => eprintln!("Key expires: {} (Unix seconds)", backup::timestamp(at)?),
+                None => eprintln!("Key expires: never"),
+            }
         }
         Command::Template { kind, output } => {
             write_output(&output.output, paper::template(kind.into()).as_bytes())?
