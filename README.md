@@ -56,22 +56,24 @@ offline GnuPG keyring. Use GnuPG to create subkeys for daily work; the
 The passphrase protects the exported file. It is **not needed to recover
 from the words**. Treat `words.txt` as secret too. Use `--output` for secret
 files: it creates private files on Unix and refuses to overwrite existing ones.
+Shell redirection does not provide these protections.
 
 ## Recover from paper
 
 Type the words into `recovered-words.txt`, separated by spaces or newlines,
-without numbering. Export again with your recorded identity and a passphrase
-file for the recovered key:
+without numbering. Choose an identity you intend to certify now; check that
+the one recorded on paper is still appropriate. Export with that identity
+and a passphrase file for the recovered key:
 
 ```sh
 gpg-keys export --input recovered-words.txt --identity 'Alice <alice@example.org>' \
   --passphrase-file passphrase.txt --output recovered-primary.asc
 ```
 
-Compare the printed fingerprint with the one on paper. Try this recovery
-before relying on your backup.
+Compare the printed fingerprint with the one on paper and your saved public
+certificate. Try this recovery before relying on your backup.
 
-Keys do not expire by default. Add `--expires 2y` to an export to set a
+Exports have no expiry by default. Add `--expires 2y` to an export to set a
 two-year validity from now. If you use expiry, set it again during recovery;
 it is not stored in the words.
 
@@ -80,6 +82,13 @@ separate backups of your public certificate (identities, signatures, and
 subkey bindings), revocation certificate, and private subkeys. Merge the
 saved public certificate after recovery. A recovered primary can create new
 subkeys, but cannot decrypt messages encrypted to a lost encryption subkey.
+
+Each export creates a fresh certification-only certificate for the supplied
+identity. Merging retains the saved certificate's packets, but the fresh
+certification can change capabilities or expiry and reactivate a revoked
+User ID. Check the merged certificate before use; the
+[recovery walkthrough](TUTORIAL.md#recovering-after-losing-the-offline-keyring)
+explains which settings can change.
 
 ## More information
 

@@ -269,6 +269,110 @@ fn explicit_compact_input_and_entropy_derivation() {
     );
 }
 
+#[test]
+fn expiration_errors_do_not_panic_or_create_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let words = dir.path().join("words.txt");
+    let output = dir.path().join("master.asc");
+    let backup = Backup::new(BackupSecret::CompactEntropy(Zeroizing::new([42; 20])), 0);
+    fs::write(&words, backup.encode().as_bytes()).unwrap();
+    for expires in [
+        "é",
+        "1年",
+        "éy",
+        "١d",
+        "213503982334600d",
+        "18446744073709551615y",
+        "49711d",
+        "136y",
+    ] {
+        let result = cli(&[
+            "export",
+            "--input",
+            words.to_str().unwrap(),
+            "--identity",
+            "Test",
+            "--public",
+            "--expires",
+            expires,
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+        assert!(
+            matches!(result.status.code(), Some(1 | 2)),
+            "{expires}: {result:?}"
+        );
+        assert!(result.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&result.stderr).contains("panicked"));
+        assert!(
+            !output.exists(),
+            "invalid expiry created an output file: {expires}"
+        );
+    }
+}
+
+#[test]
+fn expiration_after_unix_u32_range_is_exported_and_reported() {
+    use sequoia_openpgp::policy::StandardPolicy;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let dir = tempfile::tempdir().unwrap();
+    let words = dir.path().join("words.txt");
+    let backup = Backup::new_now(BackupSecret::CompactEntropy(Zeroizing::new([42; 20]))).unwrap();
+    fs::write(&words, backup.encode().as_bytes()).unwrap();
+    for protection in ["--public", "--unprotected"] {
+        let output = dir.path().join(protection);
+        let result = succeeds(cli(&[
+            "export",
+            "--input",
+            words.to_str().unwrap(),
+            "--identity",
+            "Test",
+            protection,
+            "--expires",
+            "100y",
+            "--output",
+            output.to_str().unwrap(),
+        ]));
+        let cert = Cert::from_bytes(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(cert.is_tsk(), protection == "--unprotected");
+        let policy = StandardPolicy::new();
+        let valid = cert.with_policy(&policy, None).unwrap();
+        let signed_at = valid
+            .primary_userid()
+            .unwrap()
+            .binding_signature()
+            .signature_creation_time()
+            .unwrap();
+        let expiry = valid.primary_key().key_expiration_time().unwrap();
+        assert_eq!(expiry, signed_at + Duration::from_secs(100 * 365 * 86400));
+        let seconds = expiry.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        assert!(seconds > u64::from(u32::MAX));
+        assert!(
+            String::from_utf8_lossy(&result.stderr)
+                .contains(&format!("Key expires: {seconds} (Unix seconds)"))
+        );
+    }
+}
+
+#[test]
+fn bounded_input_accepts_limit_and_rejects_extra_byte() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("entropy.hex");
+    let mut data = " ".repeat(1024 * 1024 - 40);
+    data.push_str(&"2a".repeat(20));
+    fs::write(&input, &data).unwrap();
+    let result = succeeds(cli(&["encode", "--input", input.to_str().unwrap()]));
+    let backup = Backup::decode(std::str::from_utf8(&result.stdout).unwrap()).unwrap();
+    assert_eq!(backup.secret().payload(), &[42; 20]);
+    data.push(' ');
+    fs::write(&input, &data).unwrap();
+    let result = cli(&["encode", "--input", input.to_str().unwrap()]);
+    assert_eq!(result.status.code(), Some(1));
+    assert!(result.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("input exceeds 1 MiB"));
+}
+
 fn gpg(home: &Path, args: &[&str]) -> Output {
     eprintln!("GnuPG integration operation: {}", args[0]);
     Command::new("gpg")
