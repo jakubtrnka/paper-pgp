@@ -22,16 +22,16 @@
           pkgs = pkgsFor system;
         in
         rec {
-          gpg-keys = pkgs.callPackage ./nix/package.nix { };
+          paper-pgp = pkgs.callPackage ./nix/package.nix { };
           paper-backup = pkgs.callPackage ./nix/paper-backup.nix { };
-          default = gpg-keys;
+          default = paper-pgp;
         }
       );
 
       apps = forAllSystems (system: {
         default = {
           type = "app";
-          program = "${self.packages.${system}.gpg-keys}/bin/gpg-keys";
+          program = "${self.packages.${system}.paper-pgp}/bin/paper-pgp";
           meta.description = "Generate and recover paper-backed OpenPGP master keys";
         };
       });
@@ -43,7 +43,7 @@
         in
         {
           default = pkgs.mkShell {
-            inputsFrom = [ self.packages.${system}.gpg-keys ];
+            inputsFrom = [ self.packages.${system}.paper-pgp ];
             packages = with pkgs; [
               cargo
               rustc
@@ -67,9 +67,9 @@
           packages = self.packages.${system};
         in
         {
-          inherit (packages) gpg-keys paper-backup;
+          inherit (packages) paper-pgp paper-backup;
           paper-backup-content = pkgs.callPackage ./nix/check-paper-backup.nix {
-            inherit (packages) gpg-keys paper-backup;
+            inherit (packages) paper-pgp paper-backup;
           };
         }
       );

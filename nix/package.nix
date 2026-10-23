@@ -38,7 +38,7 @@ rustPlatform.buildRustPackage {
   meta = {
     description = "Recoverable OpenPGP master keys with compact and raw paper backups";
     license = lib.licenses.mit;
-    mainProgram = "gpg-keys";
+    mainProgram = "paper-pgp";
     platforms = lib.platforms.unix;
   };
 }

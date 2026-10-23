@@ -1,4 +1,4 @@
-use gpg_keys::{
+use paper_pgp::{
     backup::{Backup, ENTROPY_LEN, WORD_COUNT, WORDLIST, WORDLIST_SHA256},
     master,
 };
@@ -12,7 +12,7 @@ use std::{
 use zeroize::Zeroizing;
 
 fn cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_gpg-keys"))
+    Command::new(env!("CARGO_BIN_EXE_paper-pgp"))
         .args(args)
         .output()
         .unwrap()
@@ -31,9 +31,9 @@ fn file_workflow_and_protection() {
     let dir = tempfile::tempdir().unwrap();
     let words_path = dir.path().join("words.txt");
     let words = words_path.to_str().unwrap();
-    let before = gpg_keys::backup::timestamp(SystemTime::now()).unwrap();
+    let before = paper_pgp::backup::timestamp(SystemTime::now()).unwrap();
     succeeds(cli(&["random", "-o", words]));
-    let after = gpg_keys::backup::timestamp(SystemTime::now()).unwrap();
+    let after = paper_pgp::backup::timestamp(SystemTime::now()).unwrap();
     let original = fs::read(words).unwrap();
     let backup = Backup::decode(std::str::from_utf8(&original).unwrap()).unwrap();
     assert!((before & !1023..=after).contains(&backup.created_at()));
@@ -86,14 +86,14 @@ fn file_workflow_and_protection() {
     let public = Cert::from_bytes(&public_bytes).unwrap();
     assert!(!public.is_tsk());
     assert_eq!(
-        gpg_keys::backup::timestamp(public.primary_key().key().creation_time()).unwrap(),
+        paper_pgp::backup::timestamp(public.primary_key().key().creation_time()).unwrap(),
         backup.created_at()
     );
     let mut args = base_args.to_vec();
     args.extend(["--public", "--expires", "2y"]);
     let whole_seconds = |t: SystemTime| {
         std::time::UNIX_EPOCH
-            + std::time::Duration::from_secs(u64::from(gpg_keys::backup::timestamp(t).unwrap()))
+            + std::time::Duration::from_secs(u64::from(paper_pgp::backup::timestamp(t).unwrap()))
     };
     let before = whole_seconds(SystemTime::now());
     let expiring = succeeds(cli(&args));
