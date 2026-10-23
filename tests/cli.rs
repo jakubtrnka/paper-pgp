@@ -32,7 +32,7 @@ fn file_workflow_and_protection() {
     let words_path = dir.path().join("words.txt");
     let words = words_path.to_str().unwrap();
     let before = paper_pgp::backup::timestamp(SystemTime::now()).unwrap();
-    succeeds(cli(&["random", "-o", words]));
+    succeeds(cli(&["generate", "-o", words]));
     let after = paper_pgp::backup::timestamp(SystemTime::now()).unwrap();
     let original = fs::read(words).unwrap();
     let backup = Backup::decode(std::str::from_utf8(&original).unwrap()).unwrap();
@@ -51,7 +51,7 @@ fn file_workflow_and_protection() {
             0o600
         );
     }
-    assert!(!cli(&["random", "-o", words]).status.success());
+    assert!(!cli(&["generate", "-o", words]).status.success());
     assert_eq!(fs::read(words).unwrap(), original);
     let decoded = succeeds(cli(&["decode", "-i", words]));
     assert!(
@@ -63,11 +63,12 @@ fn file_workflow_and_protection() {
     fs::write(&seed_file, &decoded.stdout).unwrap();
     assert_eq!(
         succeeds(cli(&[
-            "encode",
+            "generate",
+            "--from",
+            seed_file.to_str().unwrap(),
+            "--exact",
             "--created-at",
-            &backup.created_at().to_string(),
-            "-i",
-            seed_file.to_str().unwrap()
+            &backup.created_at().to_string()
         ]))
         .stdout,
         original
@@ -214,47 +215,77 @@ fn explicit_input_rounding_and_entropy_derivation() {
     let input = dir.path().join("bits.txt");
     fs::write(&input, "10101010\n".repeat(ENTROPY_LEN)).unwrap();
     let encoded = succeeds(cli(&[
-        "encode",
+        "generate",
+        "--from",
+        input.to_str().unwrap(),
         "--format",
         "binary",
+        "--exact",
         "--created-at",
         "1700000000",
-        "-i",
-        input.to_str().unwrap(),
     ]));
     let backup = Backup::decode(std::str::from_utf8(&encoded.stdout).unwrap()).unwrap();
     assert_eq!(backup.secret(), &[170; ENTROPY_LEN]);
     assert_eq!(backup.created_at(), 1699999744);
     assert!(String::from_utf8_lossy(&encoded.stderr).contains("created-at: 1699999744"));
     let derived = succeeds(cli(&[
-        "derive",
+        "generate",
+        "--from",
+        input.to_str().unwrap(),
+        "--format",
+        "binary",
         "--created-at",
         "1700000000",
-        "-i",
-        input.to_str().unwrap(),
     ]));
     let derived = Backup::decode(std::str::from_utf8(&derived.stdout).unwrap()).unwrap();
     assert_eq!(derived.created_at(), backup.created_at());
     assert_ne!(derived.secret(), backup.secret());
+    // The same bytes as hexadecimal digits derive the same entropy.
+    let hex_input = dir.path().join("bytes.hex");
+    fs::write(&hex_input, "aa".repeat(ENTROPY_LEN)).unwrap();
+    let from_hex = succeeds(cli(&[
+        "generate",
+        "--from",
+        hex_input.to_str().unwrap(),
+        "--created-at",
+        "1700000000",
+    ]));
+    assert_eq!(from_hex.stdout, derived.encode().as_bytes());
+    for incomplete in [
+        vec!["generate", "--exact"],
+        vec!["generate", "--format", "binary"],
+        vec!["generate", "--from"],
+    ] {
+        assert_eq!(cli(&incomplete).status.code(), Some(2), "{incomplete:?}");
+    }
     assert!(
         !cli(&[
-            "encode",
+            "generate",
+            "--from",
+            input.to_str().unwrap(),
+            "--format",
+            "binary",
+            "--exact",
             "--created-at",
-            "4294967296",
-            "-i",
-            input.to_str().unwrap()
+            "4294967296"
         ])
         .status
         .success()
     );
     fs::write(&input, "1".repeat(152)).unwrap();
     assert!(
-        !cli(&["derive", "-i", input.to_str().unwrap()])
-            .status
-            .success()
+        !cli(&[
+            "generate",
+            "--from",
+            input.to_str().unwrap(),
+            "--format",
+            "binary"
+        ])
+        .status
+        .success()
     );
     fs::write(&input, format!("zz{}", "f".repeat(ENTROPY_LEN * 2 - 2))).unwrap();
-    let invalid = cli(&["encode", "-i", input.to_str().unwrap()]);
+    let invalid = cli(&["generate", "--from", input.to_str().unwrap(), "--exact"]);
     assert!(!invalid.status.success());
     let stderr = String::from_utf8_lossy(&invalid.stderr);
     assert!(
@@ -426,12 +457,17 @@ fn bounded_input_accepts_limit_and_rejects_extra_byte() {
     let mut data = " ".repeat(1024 * 1024 - 40);
     data.push_str(&"2a".repeat(ENTROPY_LEN));
     fs::write(&input, &data).unwrap();
-    let result = succeeds(cli(&["encode", "--input", input.to_str().unwrap()]));
+    let result = succeeds(cli(&[
+        "generate",
+        "--from",
+        input.to_str().unwrap(),
+        "--exact",
+    ]));
     let backup = Backup::decode(std::str::from_utf8(&result.stdout).unwrap()).unwrap();
     assert_eq!(backup.secret(), &[42; ENTROPY_LEN]);
     data.push(' ');
     fs::write(&input, &data).unwrap();
-    let result = cli(&["encode", "--input", input.to_str().unwrap()]);
+    let result = cli(&["generate", "--from", input.to_str().unwrap(), "--exact"]);
     assert_eq!(result.status.code(), Some(1));
     assert!(result.stdout.is_empty());
     assert!(String::from_utf8_lossy(&result.stderr).contains("input exceeds 1 MiB"));

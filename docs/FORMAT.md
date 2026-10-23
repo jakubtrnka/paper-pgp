@@ -52,9 +52,9 @@ Bit ranges are zero-based, half-open, and most significant bit first within the
 | checksum | | 20–22 | `rs1024` over words 1–19 |
 
 The creation time is stored with 1024-second granularity: the key's creation
-time is the stored field shifted left by 10 bits. `random`, `derive`, and
-`encode` round the current or supplied time down to a multiple of 1024
-seconds, at most 17 minutes earlier, and print the stored value. The same
+time is the stored field shifted left by 10 bits. `generate` rounds the
+current or supplied time down to a multiple of 1024 seconds, at most 17
+minutes earlier, and prints the stored value. The same
 entropy with a different stored time has a different OpenPGP fingerprint, so
 re-encoding decoded entropy requires the stored time.
 
@@ -140,12 +140,13 @@ Decoding:
 
 ## Secret acquisition and creation time
 
-- **Random:** obtain 20 bytes from the operating system cryptographic RNG.
-- **Exact:** parse exactly 40 hexadecimal digits or 160 binary digits as the
-  20 entropy bytes.
-- **Entropy derivation:** parse at least 160 binary digits in whole bytes.
-  Pack bits most significant bit first and derive 20 bytes with Argon2id. Do
-  not hash the ASCII digit characters.
+- **Random** (`generate`): obtain 20 bytes from the operating system
+  cryptographic RNG.
+- **Entropy derivation** (`generate --from`): parse at least 160 hexadecimal
+  or binary digits in whole bytes. Pack bits most significant bit first and
+  derive 20 bytes with Argon2id. Do not hash the ASCII digit characters.
+- **Exact** (`generate --from --exact`): parse exactly 40 hexadecimal digits
+  or 160 binary digits as the 20 entropy bytes.
 
 Exact and derivation inputs ignore only ASCII whitespace and preserve leading
 zeros; hexadecimal input does not accept a `0x` prefix. Short inputs are
