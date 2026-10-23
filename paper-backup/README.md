@@ -52,7 +52,7 @@ The words recover the primary secret and its creation timestamp; they do not
 recover private subkeys. The instructions specify the `rs1024` checksum, the
 bit fields, HKDF expansion of the 20-byte entropy, OpenPGP recovery, and the
 separate backups needed for subkeys and public certificate updates. Full
-details are in [FORMAT.md](../FORMAT.md).
+details are in [FORMAT.md](../docs/FORMAT.md).
 
 The unmodified wordlist is attributed in the PDF and remains under CC BY-SA
 4.0; see `../data/LICENSE.slip39`.
