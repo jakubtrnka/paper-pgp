@@ -70,6 +70,10 @@ paper-pgp export --input recovered-words.txt --certificate alice-public.asc \
   --passphrase-file passphrase.txt --output recovered-primary.asc
 ```
 
+If the saved file contains secret keys, only its public information is used.
+The output contains the recovered primary secret; restore private subkeys
+from their separate backups.
+
 Without the saved certificate, export a fresh certificate instead. Choose an
 identity you intend to certify now; check that the one recorded on paper is
 still appropriate:

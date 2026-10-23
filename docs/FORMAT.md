@@ -250,10 +250,13 @@ User IDs, expirations, revocations, third-party certifications, and subkey
 bindings remain in the public certificate. Export has two modes:
 
 - **Restore** (`--certificate`): parse exactly one saved certificate, require
-  its fingerprint to equal the recovered primary's, and insert the secret-key
-  packet. Nothing is signed; every packet of the saved certificate is kept, so
-  its effective identities, capabilities, expiry, and revocations apply
-  unchanged. This is the preferred recovery.
+  its fingerprint to equal the recovered primary's, discard any existing secret
+  material, and insert the recovered primary secret-key packet. Nothing is
+  signed; public keys and signatures are kept, so its effective identities,
+  capabilities, expiry, and revocations apply unchanged. If a secret-key export
+  is supplied, its private subkeys are excluded from the output. Only the
+  recovered primary secret is exported and protected by the export passphrase.
+  This is the preferred recovery.
 - **Fresh** (`--identity`): create a certification-only certificate and
   certify the supplied User ID anew, as specified above. Merging it with a
   saved certificate retains the saved packets, but the fresh certification can

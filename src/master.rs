@@ -97,9 +97,9 @@ pub fn certificate(
 }
 
 /// Restore the recovered primary secret into a saved certificate without
-/// creating any signature. Every packet of the certificate, including User
-/// IDs, subkey bindings, expirations, and revocations, is kept as it is, so
-/// the effective metadata is exactly that of the saved certificate.
+/// creating any signature. Public keys, User IDs, subkey bindings, expirations,
+/// and revocations are kept as saved. Any existing secret material is discarded:
+/// the result contains only the recovered primary secret.
 pub fn restore(backup: &Backup, certificate: &[u8]) -> Result<Cert> {
     let mut parser =
         CertParser::from_bytes(certificate).context("cannot parse the saved certificate")?;
@@ -115,7 +115,12 @@ pub fn restore(backup: &Backup, certificate: &[u8]) -> Result<Cert> {
         cert.fingerprint() == key.fingerprint(),
         "the saved certificate does not belong to the recovered primary key"
     );
-    Ok(cert.insert_packets(Packet::SecretKey(key))?.0)
+    // A saved secret-key export may include unencrypted subkeys. Do not carry
+    // them into an export whose passphrase protects only the recovered primary.
+    Ok(cert
+        .strip_secret_key_material()
+        .insert_packets(Packet::SecretKey(key))?
+        .0)
 }
 
 /// Parse a GnuPG-style validity duration: `<n>d`, `<n>w`, `<n>m` (30 days), `<n>y` (365 days).
