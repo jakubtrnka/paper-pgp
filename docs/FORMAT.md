@@ -90,7 +90,8 @@ Any error affecting at most three words is detected with certainty. Four or
 more wrong words, or an unrelated sequence of 22 words, pass with probability
 about 2^-30. A SLIP-39 share fails this checksum because of the customization
 string and its word count. The checksum is unkeyed: it detects accidental
-damage, not malicious changes.
+damage, not malicious changes. [The tutorial](tutorial/reed-solomon.md)
+explains on a toy example why these properties hold.
 
 ## Wordlist and encoding
 
