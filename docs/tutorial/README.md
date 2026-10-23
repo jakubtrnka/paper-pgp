@@ -11,6 +11,9 @@ Read in order, or jump to the part you need.
    onto a hardware key, running two cards, and what to do when one is lost.
 4. [Technical appendix](packets.md) — the packets, fingerprints, and signature
    types behind the earlier chapters.
+5. [Reed-Solomon codes on a toy example](reed-solomon.md) — why the last
+   three words catch any three wrong words, and how a single wrong word is
+   located. Background reading.
 
 The [README](../../README.md) has the commands for creating a key and its
 paper backup, and [FORMAT.md](../FORMAT.md) specifies the backup format.
