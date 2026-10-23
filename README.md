@@ -7,11 +7,11 @@ back in to recover the same key, with the same fingerprint.
 It is built for keeping your **primary key offline**. The primary key certifies
 your identities and subkeys; separate subkeys handle everyday signing,
 encryption, and authentication. The paper is your backup if the offline copy
-is lost.
+is lost. The tool creates keys; it does not back up keys created elsewhere.
 
-- **35 words** for a new key, generated from secure random data.
-- **44 words** to back up an existing compatible Ed25519 primary key.
-- A checksum to detect transcription errors.
+- **22 words** for a new key, generated from secure random data.
+- A checksum that detects up to three wrong words and points to a single
+  wrong word.
 - A printable A5 booklet with space for the words, recovery instructions,
   and the full wordlist.
 
@@ -44,7 +44,7 @@ gpg-keys export --input words.txt --identity 'Alice <alice@example.org>' \
   --passphrase-file passphrase.txt --output primary.asc
 ```
 
-Write the 35 words from `words.txt` on paper, in order. Also record the exact
+Write the 22 words from `words.txt` on paper, in order. Also record the exact
 identity (`Alice <alice@example.org>`) and the fingerprint printed by
 `export`. The [printable booklet](paper-backup/README.md) gives you a layout
 and recovery instructions to keep with the words.
@@ -77,7 +77,8 @@ Exports have no expiry by default. Add `--expires 2y` to an export to set a
 two-year validity from now. If you use expiry, set it again during recovery;
 it is not stored in the words.
 
-**The words recover only the primary secret and its creation time.** Keep
+**The words recover only the primary secret and its creation time**, which is
+stored rounded down to a multiple of 1024 seconds. Keep
 separate backups of your public certificate (identities, signatures, and
 subkey bindings), revocation certificate, and private subkeys. Merge the
 saved public certificate after recovery. A recovered primary can create new
@@ -98,9 +99,8 @@ explains which settings can change.
   and recovery without this application.
 - [Paper booklet](paper-backup/README.md) — build, print, or customize the
   blank backup document.
-- `gpg-keys --help` and `gpg-keys <command> --help` — all commands and options,
-  including `import` for existing v4/algorithm-22 Ed25519 primary keys.
+- `gpg-keys --help` and `gpg-keys <command> --help` — all commands and options.
 
-The backup uses the SLIP-39 wordlist, but is its own format, not a SLIP-39
-share or wallet mnemonic. The code is [MIT-licensed](LICENSE); the wordlist
+The backup uses the SLIP-39 wordlist and checksum, but is its own format, not
+a SLIP-39 share or wallet mnemonic. The code is [MIT-licensed](LICENSE); the wordlist
 is [CC BY-SA 4.0](data/LICENSE.slip39), with [attribution](data/README.md).

@@ -15,14 +15,12 @@ def command(*args):
     return subprocess.run(args, check=True, capture_output=True, text=True).stdout
 
 
-pdf, wordlist_path, backup_path, master_path, kind = sys.argv[1:]
-require(kind in ("compact", "raw"), "Unknown backup variant")
+pdf, wordlist_path, backup_path, master_path = sys.argv[1:]
 backup_source = Path(backup_path).read_text()
-constant = "RAW_WORD_COUNT" if kind == "raw" else "COMPACT_WORD_COUNT"
-words = int(re.search(rf"{constant}:\s*usize\s*=\s*(\d+)", backup_source)[1])
-payload = 32 if kind == "raw" else 20
-body_length = 18 + payload
-tag = 0 if kind == "raw" else 1
+data_words = int(re.search(r"DATA_WORDS:\s*usize\s*=\s*(\d+)", backup_source)[1])
+checksum_words = int(re.search(r"CHECKSUM_WORDS:\s*usize\s*=\s*(\d+)", backup_source)[1])
+words = data_words + checksum_words
+time_shift = int(re.search(r"TIME_SHIFT:\s*u32\s*=\s*(\d+)", backup_source)[1])
 info = command("pdfinfo", "-f", "1", "-l", "10000", pdf)
 count = int(re.search(r"^Pages:\s+(\d+)", info, re.MULTILINE)[1])
 require(count == 10, f"Expected 10 A5 pages, got {count}")
@@ -41,7 +39,7 @@ for page, first, end in [(pages[0], 1, first_count), (pages[1], first_count + 1,
 require(f"{words} words" in pages[0], "Incorrect word count on the cover")
 require("Decode the backup" in pages[2], "Seed recovery instructions moved or are missing")
 require("Restore the master key" in pages[3], "OpenPGP recovery instructions moved or are missing")
-require("BE32" in pages[3] and "Reuse this stored time" in pages[3], "Stored timestamp recovery is missing")
+require(f"multiplied by {1 << time_shift}" in pages[3] and "Reuse this stored time" in pages[3], "Stored timestamp recovery is missing")
 recovery_text = re.sub(r"\s+", " ", pages[3])
 require(
     re.search(r"Self-certify.*?current export time, certification-only flags", recovery_text),
@@ -59,26 +57,28 @@ require(hashlib.sha256(wordlist_bytes).hexdigest() == expected_hash, "Wordlist h
 compact_text = re.sub(r"\s+", "", text)
 require("else[" not in compact_text, "Typst conditional was printed as recovery instructions")
 require(expected_hash in compact_text, "Printed wordlist hash is wrong")
-checksum_domain = re.search(r'CHECKSUM_DOMAIN:.*?b"([^"\\]+)', backup_source)[1]
-require(checksum_domain in text, "Printed checksum domain is wrong")
+
+decode_text = re.sub(r"\s+", " ", pages[2])
+customization = re.search(r'CUSTOMIZATION:.*?b"([a-z]+)"', backup_source)[1]
+codes = " ".join(str(ord(c)) for c in customization)
+require(f"`{customization}` ({codes})" in decode_text or f"{customization} ({codes})" in decode_text, "Printed customization string is wrong")
+generators = re.findall(r"0x[0-9a-f]+", re.search(r"GEN:\s*\[u32;\s*10\]\s*=\s*\[(.*?)\];", backup_source, re.DOTALL)[1])
+require(len(generators) == 10, "Cannot read the generator constants from the source")
+for generator in generators:
+    require(generator in compact_text, f"Generator constant {generator} is not printed")
 version = int(re.search(r"SCHEME_VERSION:\s*u8\s*=\s*(\d+)", backup_source)[1])
+entropy_len = int(re.search(r"ENTROPY_LEN:\s*usize\s*=\s*(\d+)", backup_source)[1])
+time_bits = 32 - time_shift
 for expected in [
-    f"Version{version:02x}",
-    "[13,17)Creationtimestamp:unsignedbig-endianUnixseconds",
-    f"[17,18)Tag{tag:02x}:",
-    f"[18,{body_length}){payload}bytesofsecretpayload",
-    f"[{body_length},{body_length + 5})First5bytes",
-    f"serialized_bytes[0:{body_length}]",
+    f"[0,8)Version{version:02x}",
+    f"[8,{8 + time_bits})Creationtimedividedby{1 << time_shift}",
+    f"[{8 + time_bits},{data_words * 10}){entropy_len * 8}bitsofentropy",
+    f"{data_words * 10}bits",
 ]:
-    require(expected in compact_text, f"Printed binary field differs from the scheme: {expected}")
+    require(expected in compact_text, f"Printed bit field differs from the scheme: {expected}")
 master_source = Path(master_path).read_text()
-if kind == "compact":
-    require("final 6 bits are zero" in text, "Compact padding validation is missing")
-    for name in ["MASTER_SALT", "MASTER_INFO"]:
-        value = re.search(rf'{name}:.*?b"([^"]+)"', master_source)[1]
-        require(value in text, f"Printed HKDF parameter differs: {name}")
-    require("stored 20-byte entropy" in text, "Compact HKDF input size is wrong")
-else:
-    require("There are no padding bits" in text, "Raw padding instructions are wrong")
-    require("DonotapplyHKDF" in compact_text, "Raw recovery must explicitly bypass HKDF")
-print(f"Verified {kind}: {count} A5 pages, {words} handwriting slots, recovery parameters, and all {len(expected_words)} words")
+for name in ["MASTER_SALT", "MASTER_INFO"]:
+    value = re.search(rf'{name}:.*?b"([^"]+)"', master_source)[1]
+    require(value in text, f"Printed HKDF parameter differs: {name}")
+require(f"stored {entropy_len}-byte entropy" in text, "HKDF input size is wrong")
+print(f"Verified: {count} A5 pages, {words} handwriting slots, recovery parameters, and all {len(expected_words)} words")
