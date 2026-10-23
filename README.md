@@ -51,7 +51,7 @@ and recovery instructions to keep with the words.
 
 `primary.asc` is a passphrase-protected secret key you can import into an
 offline GnuPG keyring. Use GnuPG to create subkeys for daily work; the
-[tutorial](TUTORIAL.md) explains how the pieces fit together.
+[tutorial](docs/tutorial/README.md) explains how the pieces fit together.
 
 The passphrase protects the exported file. It is **not needed to recover
 from the words**. Treat `words.txt` as secret too. Use `--output` for secret
@@ -88,14 +88,17 @@ Each export creates a fresh certification-only certificate for the supplied
 identity. Merging retains the saved certificate's packets, but the fresh
 certification can change capabilities or expiry and reactivate a revoked
 User ID. Check the merged certificate before use; the
-[recovery walkthrough](TUTORIAL.md#recovering-after-losing-the-offline-keyring)
+[recovery walkthrough](docs/tutorial/backup-recovery.md#recovering-after-losing-the-offline-keyring)
 explains which settings can change.
 
 ## More information
 
-- [TUTORIAL.md](TUTORIAL.md) — primary keys, identities, subkeys, trust,
-  and practices for keeping the primary offline.
-- [FORMAT.md](FORMAT.md) — the exact backup format, supported key types,
+- [Tutorial](docs/tutorial/README.md) — primary keys, identities, subkeys,
+  trust, backup and recovery, and a technical appendix.
+- [Nitrokey guide](docs/tutorial/nitrokey.md) — moving the subkeys onto a
+  Nitrokey 3 or another OpenPGP card, with the paper and offline keyring as
+  the backup.
+- [FORMAT.md](docs/FORMAT.md) — the exact backup format, supported key types,
   and recovery without this application.
 - [Paper booklet](paper-backup/README.md) — build, print, or customize the
   blank backup document.

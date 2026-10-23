@@ -4,11 +4,13 @@ Alice wants to sign files and receive encrypted messages without keeping her
 most important secret key on her everyday computer. This guide follows her
 setup, explains what each part does, and shows what she can recover from paper.
 
-The [README](README.md) has the commands for creating a key and its paper
-backup. Here we build on that example, using `Alice <alice@example.org>` and
-the exported `primary.asc`. You can read along without running the commands.
-Packet layouts and signature types are collected in the
-[technical appendix](#technical-appendix).
+The [README](../../README.md) has the commands for creating a key and its
+paper backup. Here we build on that example, using `Alice <alice@example.org>`
+and the exported `primary.asc`. You can read along without running the
+commands. The backup and recovery steps continue in
+[backup-recovery.md](backup-recovery.md), moving the subkeys onto a hardware
+key is covered in [nitrokey.md](nitrokey.md), and packet layouts and signature
+types are collected in the [technical appendix](packets.md).
 
 ## 1. The setup we are building
 
@@ -25,7 +27,7 @@ flowchart LR
 ```
 
 The subkeys have their own secrets. Alice can keep them on her daily computer
-or a suitable hardware token. Losing a subkey does not require changing her
+or a suitable [hardware token](nitrokey.md). Losing a subkey does not require changing her
 primary key, and a stolen subkey does not give someone the primary secret.
 
 The public parts travel together in an **OpenPGP certificate**: the primary
@@ -115,7 +117,8 @@ to a smart card. A new primary-key export cannot recreate its secret.
 For daily use, she transfers the needed secret subkeys and the public
 certificate to her working environment, while keeping the primary secret
 offline. GnuPG provides `--export-secret-subkeys` for this purpose; hardware
-tokens have their own provisioning steps. See the
+tokens have their own provisioning steps, shown for a Nitrokey 3 in
+[nitrokey.md](nitrokey.md). See the
 [GnuPG command reference](https://www.gnupg.org/documentation/manuals/gnupg/Operational-GPG-Commands.html)
 for the export options. These exports contain secrets and need protection.
 
@@ -241,164 +244,4 @@ The verifier's policy and the revocation reason matter. See
 Revoking a User ID similarly announces that the identity is no longer in
 use. It does not remove that identity from copies already distributed.
 
-## 6. Backing up and recovering the setup
-
-Alice's paper words restore the primary secret and its creation time.
-Keeping her whole setup recoverable takes a few separate backups:
-
-| What Alice keeps | What it preserves |
-| --- | --- |
-| Paper words | The primary secret and creation time. Anyone with the words can recover it. |
-| Public certificate | Identities, certifications, subkey bindings, expiry updates, and revocations. |
-| Private subkeys | Access to the existing subkeys, especially decryption of old messages. |
-| Revocation certificate | A way to revoke the primary if she can no longer use it. |
-| Local GnuPG state | Ownertrust and any configuration she wants to retain. |
-
-After changing identities, subkeys, expiry, or revocations, she saves a fresh
-public certificate from the offline keyring. For the first copy:
-
-```sh
-gpg --homedir offline-gnupg --output alice-public.asc --armor \
-  --export PRIMARY_FINGERPRINT
-```
-
-On later exports, she uses a new filename or deliberately replaces the old
-backup. The public certificate is shareable; the paper and private-key
-backups must remain confidential.
-
-### Recovering after losing the offline keyring
-
-Alice practices recovery before she depends on the backup:
-
-1. She types the words from paper into a file and follows the
-   [README's recovery example](README.md#recover-from-paper) to export
-   `recovered-primary.asc`, using a User ID she intends to certify now.
-   She checks that the identity recorded on paper is still appropriate.
-2. She compares the printed fingerprint with the paper and her saved public
-   certificate. They must identify the same primary key.
-3. She imports the recovered primary and the saved public certificate into
-   a fresh offline GnuPG home.
-4. She restores any separately backed-up private subkeys and ownertrust,
-   then checks the resulting identities, capabilities, expiry, revocations,
-   and subkeys before use.
-
-The import in step 3 is:
-
-```sh
-mkdir -m 700 recovered-gnupg
-gpg --homedir recovered-gnupg --import recovered-primary.asc alice-public.asc
-```
-
-Recovery keeps the original creation time in the primary-key packet and
-creates a fresh self-signature dated at export time. This certifies the
-supplied User ID anew. Merging the saved public certificate retains its
-packets, including revocations and subkey bindings, but the fresh
-certification can reactivate a retired User ID or replace earlier capability
-and expiry settings. It does not undo a compromised-primary-key revocation.
-
-**If Alice wants the fresh certificate to expire, she passes `--expires`
-again during recovery.** If the new self-signature becomes active after
-merging, its settings apply, including no expiry when that option is omitted.
-It is not guaranteed to take precedence: signatures made in the same second,
-a clock that has moved backwards, or existing future-dated signatures can
-affect selection. Alice checks the merged certificate and uses GnuPG's
-key-management commands to make deliberate changes to its settings.
-
-With her primary restored, Alice can authorize new subkeys. To decrypt old
-messages, she still needs the original private encryption subkey. Its public
-binding and her recovered primary secret cannot reconstruct it.
-
-For the backup format and independent recovery instructions, see
-[FORMAT.md](FORMAT.md). For a document to keep with the handwritten words,
-see the [printable booklet](paper-backup/README.md).
-
-## Technical appendix
-
-The details below explain how the relationships above are represented.
-They are optional for following Alice's setup. The packet and fingerprint
-examples describe the version 4 keys produced by this project.
-
-### Secret handling
-
-The application wipes its secret buffers and Argon2 workspace when dropped.
-It allocates input/output buffers before filling them to avoid leaving
-unwiped copies when those buffers grow. This is best-effort cleanup:
-temporary stack or library copies, I/O buffers, terminal scrollback, swap,
-and process snapshots can retain secrets. Alice still protects her files
-and the machine on which she generates or recovers keys.
-
-### The primary-key packet and fingerprint
-
-The primary public-key packet contains a version, creation time, algorithm,
-and public key material. For `paper-pgp`, these are version 4, the backed-up
-timestamp, algorithm 22 (legacy OpenPGP Ed25519), and the curve identifier
-plus encoded Ed25519 public point.
-
-```text
-fingerprint = SHA-1(0x99 || two-byte body length || public-key packet body)
-```
-
-Names, expiry, and capabilities are not fields in that packet. For the
-certificates this tool exports, they are represented by User IDs and their
-self-signatures. The primary secret is a 32-byte native Ed25519 seed,
-derived from the stored 20-byte entropy. The precise
-derivation and encoding are specified in [FORMAT.md](FORMAT.md).
-
-### Who signs what
-
-| Signature | Type | Signer | What it connects or affects |
-| --- | --- | --- | --- |
-| Data signature | `0x00` / `0x01` | A signing key | Binary data / canonical text |
-| User ID certification | `0x10`–`0x13` | The primary itself or another certifier | Primary key and User ID |
-| Subkey binding | `0x18` | Primary key | Primary key and subkey |
-| Back-signature | `0x19` | Signing subkey | The same primary key and subkey |
-| Key revocation | `0x20` | Primary key in Alice's setup | Primary key |
-| Subkey revocation | `0x28` | Primary key in Alice's setup | Primary key and subkey |
-| Certification revocation | `0x30` | The certifier | Its earlier certification |
-
-`paper-pgp` creates a type `0x13` self-certification. It carries the certify
-flag, optional primary expiry, algorithm preferences, and a primary-User-ID
-marker. Subkey bindings carry the subkey's capabilities and expiry instead.
-
-For version 4 keys, the signed inputs have these shapes:
-
-```text
-User ID certification:
-    0x99 || two-byte primary body length || primary body
-    0xB4 || four-byte User ID length || User ID
-    signature metadata and trailer
-
-Subkey binding and back-signature:
-    0x99 || two-byte primary body length || primary body
-    0x99 || two-byte subkey body length || subkey body
-    signature metadata and trailer
-```
-
-These are structural sketches, not a complete signing implementation.
-
-### Why a signing subkey signs back
-
-A primary signs the binding to a subkey. A signing subkey also signs back,
-confirming the association with that primary. Its back-signature is embedded
-in the primary's binding signature. This prevents another primary holder
-from simply attaching someone else's public signing subkey and claiming its
-signatures. GnuPG explains the mechanism in its
-[cross-certification guide](https://www.gnupg.org/faq/subkey-cross-certify.html).
-
-A holder of the necessary secrets can deliberately bind a subkey under a
-different primary. Its fingerprint stays the same, but the new primary must
-make a new binding, and a signing subkey must make a new back-signature.
-This is an advanced migration operation; it is not needed for paper recovery.
-
-### Updating metadata and delegating trust
-
-For multiple self-signatures on the same component, the newest valid one
-determines its metadata. This is how expiry and preferences can change
-without changing the key. Do not depend on ordering between signatures made
-in the same second. See the specification's
-[notes on self-signatures](https://www.rfc-editor.org/rfc/rfc9580.html#section-5.2.3.10).
-
-A third-party certification can also carry a **trust signature**, delegating
-authority to certify other identities within a stated scope and depth.
-This supports arrangements such as organizational certifiers; Alice does not
-need it for the personal setup described here.
+Next: [Backing up and recovering the setup](backup-recovery.md).
