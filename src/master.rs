@@ -2,11 +2,13 @@ use crate::backup::{Backup, ENTROPY_LEN};
 use anyhow::{Context, Result, bail, ensure};
 use pgp::{
     Cert, Packet,
+    cert::CertParser,
     packet::{
         Key, UserID,
         key::{PrimaryRole, SecretParts},
         signature::SignatureBuilder,
     },
+    parse::Parse,
     types::{HashAlgorithm, KeyFlags, SignatureType, SymmetricAlgorithm},
 };
 use sequoia_openpgp as pgp;
@@ -92,6 +94,28 @@ pub fn certificate(
         ]
         .into_iter(),
     )
+}
+
+/// Restore the recovered primary secret into a saved certificate without
+/// creating any signature. Every packet of the certificate, including User
+/// IDs, subkey bindings, expirations, and revocations, is kept as it is, so
+/// the effective metadata is exactly that of the saved certificate.
+pub fn restore(backup: &Backup, certificate: &[u8]) -> Result<Cert> {
+    let mut parser =
+        CertParser::from_bytes(certificate).context("cannot parse the saved certificate")?;
+    let cert = parser
+        .next()
+        .context("no OpenPGP certificate found in the saved certificate")??;
+    ensure!(
+        parser.next().is_none(),
+        "the saved certificate must contain exactly one certificate, not a keyring"
+    );
+    let key = primary_key(backup)?;
+    ensure!(
+        cert.fingerprint() == key.fingerprint(),
+        "the saved certificate does not belong to the recovered primary key"
+    );
+    Ok(cert.insert_packets(Packet::SecretKey(key))?.0)
 }
 
 /// Parse a GnuPG-style validity duration: `<n>d`, `<n>w`, `<n>m` (30 days), `<n>y` (365 days).
@@ -289,6 +313,59 @@ mod tests {
         let unlimited = unlimited.with_policy(&policy, signed_at).unwrap();
         assert_eq!(unlimited.primary_key().key_expiration_time(), None);
         assert!(certificate(&backup, "Alice", signed_at, Some(signed_at)).is_err());
+    }
+
+    #[test]
+    fn restore_inserts_secret_without_signing() {
+        use pgp::serialize::SerializeInto;
+
+        let backup = example();
+        let created = backup.creation_time();
+        let signed_at = created + Duration::from_secs(3600);
+        let expiry = created + Duration::from_secs(365 * 86400);
+        let original = certificate(
+            &backup,
+            "Alice <alice@example.org>",
+            signed_at,
+            Some(expiry),
+        )
+        .unwrap();
+        let policy = StandardPolicy::new();
+        let signatures = |cert: &Cert| {
+            cert.clone()
+                .into_packets()
+                .filter(|p| matches!(p, Packet::Signature(_)))
+                .count()
+        };
+        for saved in [
+            original.armored().to_vec().unwrap(),
+            original.as_tsk().to_vec().unwrap(),
+        ] {
+            let restored = restore(&backup, &saved).unwrap();
+            assert!(restored.is_tsk());
+            assert_eq!(restored.fingerprint(), original.fingerprint());
+            assert_eq!(signatures(&restored), signatures(&original));
+            assert!(restored.primary_key().key().has_unencrypted_secret());
+            let valid = restored.with_policy(&policy, signed_at).unwrap();
+            assert_eq!(valid.primary_key().key_expiration_time(), Some(expiry));
+            assert_eq!(
+                valid
+                    .primary_userid()
+                    .unwrap()
+                    .binding_signature()
+                    .signature_creation_time(),
+                Some(signed_at)
+            );
+            let protected = protect(restored, b"test password").unwrap();
+            assert!(!protected.primary_key().key().has_unencrypted_secret());
+        }
+        let other = Backup::new(Zeroizing::new([43; ENTROPY_LEN]), backup.created_at());
+        let err = restore(&other, &original.armored().to_vec().unwrap()).unwrap_err();
+        assert!(err.to_string().contains("does not belong"), "{err}");
+        let mut keyring = original.to_vec().unwrap();
+        keyring.extend(original.to_vec().unwrap());
+        assert!(restore(&backup, &keyring).is_err());
+        assert!(restore(&backup, b"not a certificate").is_err());
     }
 
     #[test]

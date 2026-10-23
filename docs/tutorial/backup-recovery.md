@@ -34,39 +34,49 @@ backups must remain confidential.
 
 Alice practices recovery before she depends on the backup:
 
-1. She types the words from paper into a file and follows the
-   [README's recovery example](../../README.md#recover-from-paper) to export
-   `recovered-primary.asc`, using a User ID she intends to certify now.
-   She checks that the identity recorded on paper is still appropriate.
+1. She types the words from paper into a file and restores the secret into
+   her saved public certificate:
+
+   ```sh
+   paper-pgp export --input recovered-words.txt --certificate alice-public.asc \
+     --passphrase-file passphrase.txt --output recovered-primary.asc
+   ```
+
+   This adds the primary secret to the certificate and signs nothing, so the
+   result carries exactly the identities, subkey bindings, expiry, and
+   revocations she saved.
 2. She compares the printed fingerprint with the paper and her saved public
    certificate. They must identify the same primary key.
-3. She imports the recovered primary and the saved public certificate into
-   a fresh offline GnuPG home.
+3. She imports the result into a fresh offline GnuPG home:
+
+   ```sh
+   mkdir -m 700 recovered-gnupg
+   gpg --homedir recovered-gnupg --import recovered-primary.asc
+   ```
+
 4. She restores any separately backed-up private subkeys and ownertrust,
    then checks the resulting identities, capabilities, expiry, revocations,
    and subkeys before use.
 
-The import in step 3 is:
+### If the public certificate is lost too
 
-```sh
-mkdir -m 700 recovered-gnupg
-gpg --homedir recovered-gnupg --import recovered-primary.asc alice-public.asc
-```
+Alice follows the [README's fresh-export example](../../README.md#recover-from-paper)
+instead, using a User ID she intends to certify now. Recovery then keeps the
+original creation time in the primary-key packet and creates a fresh
+self-signature dated at export time. This certifies the supplied User ID anew.
+If a copy of the public certificate turns up later and she merges it, its
+packets are retained, including revocations and subkey bindings, but the
+fresh certification can reactivate a retired User ID or replace earlier
+capability and expiry settings. It does not undo a compromised-primary-key
+revocation.
 
-Recovery keeps the original creation time in the primary-key packet and
-creates a fresh self-signature dated at export time. This certifies the
-supplied User ID anew. Merging the saved public certificate retains its
-packets, including revocations and subkey bindings, but the fresh
-certification can reactivate a retired User ID or replace earlier capability
-and expiry settings. It does not undo a compromised-primary-key revocation.
-
-**If Alice wants the fresh certificate to expire, she passes `--expires`
-again during recovery.** If the new self-signature becomes active after
-merging, its settings apply, including no expiry when that option is omitted.
-It is not guaranteed to take precedence: signatures made in the same second,
-a clock that has moved backwards, or existing future-dated signatures can
-affect selection. Alice checks the merged certificate and uses GnuPG's
-key-management commands to make deliberate changes to its settings.
+**If Alice wants the fresh certificate to expire, she passes `--expires`.**
+If the new self-signature becomes active after merging, its settings apply,
+including no expiry when that option is omitted. It is not guaranteed to take
+precedence: signatures made in the same second, a clock that has moved
+backwards, or existing future-dated signatures can affect selection. Alice
+checks the merged certificate and uses GnuPG's key-management commands to
+make deliberate changes to its settings.
 
 With her primary restored, Alice can authorize new subkeys. To decrypt old
 messages, she still needs the original private encryption subkey. Its public

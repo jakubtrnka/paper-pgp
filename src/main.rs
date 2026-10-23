@@ -85,13 +85,16 @@ enum Command {
         #[command(flatten)]
         output: Output,
     },
-    /// Export a fresh certification-only certificate from the recovered master key.
+    /// Export the recovered master key: into a saved certificate, or as a fresh certificate.
     Export {
         #[command(flatten)]
         input: Input,
-        /// User ID to certify anew, e.g. 'Alice <alice@example.org>'.
-        #[arg(long)]
-        identity: String,
+        /// Saved public certificate to restore the secret into; nothing is signed.
+        #[arg(long, conflicts_with_all = ["identity", "expires", "public"])]
+        certificate: Option<String>,
+        /// User ID for a fresh certification-only certificate, e.g. 'Alice <alice@example.org>'.
+        #[arg(long, required_unless_present = "certificate")]
+        identity: Option<String>,
         /// File with an export passphrase (one final LF or CRLF is removed).
         #[arg(long, conflicts_with_all = ["unprotected", "public"], required_unless_present_any = ["unprotected", "public"])]
         passphrase_file: Option<String>,
@@ -201,10 +204,10 @@ fn store_new(secret: Entropy, creation: Creation, output: Output) -> Result<()> 
     Ok(())
 }
 
-fn separate_stdin(input: &Input, password: &Option<String>) -> Result<()> {
+fn separate_stdin(paths: &[Option<&str>]) -> Result<()> {
     ensure!(
-        password.as_deref() != Some("-") || input.input != "-",
-        "key material and passphrase cannot both read stdin"
+        paths.iter().filter(|path| **path == Some("-")).count() <= 1,
+        "only one of the words, the passphrase, and the certificate can read stdin"
     );
     Ok(())
 }
@@ -256,6 +259,7 @@ fn run() -> Result<()> {
         }
         Command::Export {
             input,
+            certificate,
             identity,
             passphrase_file,
             unprotected,
@@ -263,7 +267,11 @@ fn run() -> Result<()> {
             expires,
             output,
         } => {
-            separate_stdin(&input, &passphrase_file)?;
+            separate_stdin(&[
+                Some(input.input.as_str()),
+                passphrase_file.as_deref(),
+                certificate.as_deref(),
+            ])?;
             let bytes = read_input(&input.input)?;
             let backup = Backup::decode(text(&bytes)?)?;
             // OpenPGP stores whole seconds; truncate so printed and stored times agree.
@@ -276,7 +284,11 @@ fn run() -> Result<()> {
             let expiry_seconds = expires_at
                 .map(|at| at.duration_since(UNIX_EPOCH).map(|d| d.as_secs()))
                 .transpose()?;
-            let mut cert = master::certificate(&backup, &identity, now, expires_at)?;
+            let mut cert = match (&certificate, &identity) {
+                (Some(path), _) => master::restore(&backup, &read_input(path)?)?,
+                (None, Some(identity)) => master::certificate(&backup, identity, now, expires_at)?,
+                (None, None) => unreachable!("clap requires --identity or --certificate"),
+            };
             if let Some(path) = passphrase_file {
                 cert = master::protect(cert, &read_password(&path)?)?;
             } else if unprotected {
@@ -289,9 +301,17 @@ fn run() -> Result<()> {
             };
             write_output(&output.output, &result)?;
             eprintln!("Primary fingerprint: {}", cert.fingerprint());
-            match expiry_seconds {
-                Some(seconds) => eprintln!("Key expires: {seconds} (Unix seconds)"),
-                None => eprintln!("Key expires: never"),
+            if certificate.is_some() {
+                eprintln!(
+                    "Restored into the saved certificate: {} user IDs, {} subkeys, nothing signed",
+                    cert.userids().count(),
+                    cert.keys().subkeys().count()
+                );
+            } else {
+                match expiry_seconds {
+                    Some(seconds) => eprintln!("Key expires: {seconds} (Unix seconds)"),
+                    None => eprintln!("Key expires: never"),
+                }
             }
         }
         Command::Template { output } => write_output(&output.output, paper::template().as_bytes())?,
