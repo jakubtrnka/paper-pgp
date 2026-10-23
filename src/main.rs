@@ -51,28 +51,18 @@ enum Format {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Generate 160 bits of OS entropy as a 22-word backup.
-    Random {
-        #[command(flatten)]
-        creation: Creation,
-        #[command(flatten)]
-        output: Output,
-    },
-    /// Derive backup entropy using Argon2id from at least 160 high-entropy bits.
-    Derive {
-        #[command(flatten)]
-        input: Input,
-        #[command(flatten)]
-        creation: Creation,
-        #[command(flatten)]
-        output: Output,
-    },
-    /// ADVANCED: encode exact entropy, 40 hexadecimal or 160 binary digits.
-    Encode {
-        #[command(flatten)]
-        input: Input,
-        #[arg(long, value_enum, default_value = "hex")]
+    /// Generate a new backup from operating-system randomness, or from entropy you supply.
+    Generate {
+        /// Entropy file ('-' reads stdin): at least 160 bits, e.g. coin flips, condensed
+        /// with Argon2id. Without it, 160 bits of operating-system randomness are used.
+        #[arg(long)]
+        from: Option<String>,
+        /// Digit format of the --from file.
+        #[arg(long, value_enum, default_value = "hex", requires = "from")]
         format: Format,
+        /// ADVANCED: use exactly 160 bits from --from verbatim, without Argon2id.
+        #[arg(long, requires = "from")]
+        exact: bool,
         #[command(flatten)]
         creation: Creation,
         #[command(flatten)]
@@ -227,31 +217,32 @@ fn serialize_secret(value: &impl SerializeInto) -> Result<Zeroizing<Vec<u8>>> {
 
 fn run() -> Result<()> {
     match Cli::parse().command {
-        Command::Random { creation, output } => store_new(backup::random()?, creation, output)?,
-        Command::Derive {
-            input,
-            creation,
-            output,
-        } => {
-            eprintln!("Provide high-entropy bits: a KDF cannot create missing entropy.");
-            let bytes = read_input(&input.input)?;
-            store_new(backup::derive(text(&bytes)?)?, creation, output)?;
-        }
-        Command::Encode {
-            input,
+        Command::Generate {
+            from,
             format,
+            exact,
             creation,
             output,
         } => {
-            eprintln!(
-                "WARNING: exact-secret input is for advanced users; its entropy is your responsibility."
-            );
-            let bytes = read_input(&input.input)?;
-            store_new(
-                backup::parse_exact(text(&bytes)?, matches!(format, Format::Binary))?,
-                creation,
-                output,
-            )?;
+            let secret = match from {
+                None => backup::random()?,
+                Some(path) => {
+                    let binary = matches!(format, Format::Binary);
+                    let bytes = read_input(&path)?;
+                    if exact {
+                        eprintln!(
+                            "WARNING: exact entropy is for advanced users; its quality is your responsibility."
+                        );
+                        backup::parse_exact(text(&bytes)?, binary)?
+                    } else {
+                        eprintln!(
+                            "Provide high-entropy digits: a KDF cannot create missing entropy."
+                        );
+                        backup::derive(text(&bytes)?, binary)?
+                    }
+                }
+            };
+            store_new(secret, creation, output)?;
         }
         Command::Decode { input, output } => {
             let bytes = read_input(&input.input)?;

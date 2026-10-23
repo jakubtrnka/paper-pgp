@@ -308,39 +308,58 @@ fn binary_bytes(input: &str) -> Result<Zeroizing<Vec<u8>>> {
     Ok(bytes)
 }
 
-pub fn parse_exact(input: &str, binary: bool) -> Result<Entropy> {
-    let mut entropy = Zeroizing::new([0; ENTROPY_LEN]);
+fn hex_bytes(input: &str) -> Result<Zeroizing<Vec<u8>>> {
+    let digits = compact(input);
+    ensure!(
+        digits.len().is_multiple_of(2),
+        "hexadecimal input must contain whole bytes"
+    );
+    let mut bytes = Zeroizing::new(vec![0; digits.len() / 2]);
+    // The library's error names the offending character; keep input out of messages.
+    hex::decode_to_slice(digits.as_bytes(), &mut bytes).map_err(|_| {
+        anyhow::anyhow!(
+            "hexadecimal input must contain only hexadecimal digits and ASCII whitespace"
+        )
+    })?;
+    Ok(bytes)
+}
+
+fn input_bytes(input: &str, binary: bool) -> Result<Zeroizing<Vec<u8>>> {
     if binary {
-        let bytes = binary_bytes(input)?;
-        ensure!(
-            bytes.len() == ENTROPY_LEN,
-            "exact secret must contain {} binary digits",
-            ENTROPY_LEN * 8
-        );
-        entropy.copy_from_slice(&bytes);
+        binary_bytes(input)
     } else {
-        let input = compact(input);
-        ensure!(
-            input.len() == ENTROPY_LEN * 2,
-            "exact secret must contain {} hexadecimal digits",
-            ENTROPY_LEN * 2
-        );
-        // The library's error names the offending character; keep input out of messages.
-        hex::decode_to_slice(input.as_bytes(), entropy.as_mut()).map_err(|_| {
-            anyhow::anyhow!(
-                "exact secret must contain only hexadecimal digits and ASCII whitespace"
-            )
-        })?;
+        hex_bytes(input)
     }
+}
+
+fn digits(binary: bool, bytes: usize) -> String {
+    if binary {
+        format!("{} binary digits", bytes * 8)
+    } else {
+        format!("{} hexadecimal digits", bytes * 2)
+    }
+}
+
+/// Use exactly 160 supplied bits verbatim.
+pub fn parse_exact(input: &str, binary: bool) -> Result<Entropy> {
+    let bytes = input_bytes(input, binary)?;
+    ensure!(
+        bytes.len() == ENTROPY_LEN,
+        "exact entropy must contain {}",
+        digits(binary, ENTROPY_LEN)
+    );
+    let mut entropy = Zeroizing::new([0; ENTROPY_LEN]);
+    entropy.copy_from_slice(&bytes);
     Ok(entropy)
 }
 
-pub fn derive(input: &str) -> Result<Entropy> {
-    let entropy = binary_bytes(input)?;
+/// Condense at least 160 supplied bits with Argon2id.
+pub fn derive(input: &str, binary: bool) -> Result<Entropy> {
+    let entropy = input_bytes(input, binary)?;
     ensure!(
         entropy.len() >= ENTROPY_LEN,
-        "provide at least {} high-entropy binary digits",
-        ENTROPY_LEN * 8
+        "provide at least {} of high entropy",
+        digits(binary, ENTROPY_LEN)
     );
     let salt = Sha256::digest(ENTROPY_DOMAIN);
     let params = Params::new(65536, 3, 1, Some(ENTROPY_LEN))?;
@@ -411,18 +430,20 @@ mod tests {
             .iter()
             .map(|b| format!("{b:08b}"))
             .collect::<String>();
-        let secret = derive(&input).unwrap();
+        let secret = derive(&input, true).unwrap();
         assert_eq!(hex::encode(secret.as_ref()), v[2]);
+        assert_eq!(derive(v[1], false).unwrap(), secret);
+        assert_eq!(derive(&v[1].to_uppercase(), false).unwrap(), secret);
         let spaced = input
             .as_bytes()
             .chunks(8)
             .map(|c| std::str::from_utf8(c).unwrap())
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(derive(&spaced).unwrap(), secret);
+        assert_eq!(derive(&spaced, true).unwrap(), secret);
         let mut changed = input;
         changed.replace_range(..1, "1");
-        assert_ne!(derive(&changed).unwrap(), secret);
+        assert_ne!(derive(&changed, true).unwrap(), secret);
     }
 
     #[test]
@@ -546,7 +567,10 @@ mod tests {
         let debug = format!("{:?}", Backup::new(secret, 1700000000));
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains(&input));
-        assert!(derive(&"1".repeat(152)).is_err());
-        assert!(derive(&"2".repeat(160)).is_err());
+        assert!(derive(&"1".repeat(152), true).is_err());
+        assert!(derive(&"2".repeat(160), true).is_err());
+        assert!(derive(&"ab".repeat(19), false).is_err());
+        assert!(derive("abc", false).is_err());
+        assert!(derive(&"zz".repeat(20), false).is_err());
     }
 }

@@ -39,7 +39,7 @@ On your offline machine, save your chosen export passphrase in a private
 file named `passphrase.txt`. Then generate the words and export the key:
 
 ```sh
-paper-pgp random --output words.txt
+paper-pgp generate --output words.txt
 paper-pgp export --input words.txt --identity 'Alice <alice@example.org>' \
   --passphrase-file passphrase.txt --output primary.asc
 ```
