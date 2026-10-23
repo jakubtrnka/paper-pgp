@@ -210,6 +210,103 @@ fn file_workflow_and_protection() {
 }
 
 #[test]
+fn restore_exports_only_the_recovered_primary_secret() {
+    use sequoia_openpgp::{
+        crypto::Password,
+        packet::{
+            Key,
+            key::{Key4, SubordinateRole},
+            signature::SignatureBuilder,
+        },
+        serialize::SerializeInto,
+        types::{Curve, KeyFlags, SignatureType},
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let words = dir.path().join("words.txt");
+    let saved = dir.path().join("saved-secret.asc");
+    let password = dir.path().join("password");
+    let backup = Backup::new(Zeroizing::new([42; ENTROPY_LEN]), 1767225344);
+    fs::write(&words, backup.encode().as_bytes()).unwrap();
+    fs::write(&password, b"export password\n").unwrap();
+    let original = master::certificate(&backup, "Recovery Test", SystemTime::now(), None).unwrap();
+    let mut signer = master::primary_key(&backup)
+        .unwrap()
+        .into_keypair()
+        .unwrap();
+    let subkey: Key<_, SubordinateRole> = Key4::generate_ecc(false, Curve::Cv25519).unwrap().into();
+    let binding = subkey
+        .bind(
+            &mut signer,
+            &original,
+            SignatureBuilder::new(SignatureType::SubkeyBinding)
+                .set_key_flags(KeyFlags::empty().set_storage_encryption())
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Neither plaintext nor encrypted input subkeys belong in a primary recovery.
+    for encrypted_input in [false, true] {
+        let subkey = if encrypted_input {
+            subkey
+                .clone()
+                .encrypt_secret(&Password::from(&b"input password"[..]))
+                .unwrap()
+        } else {
+            subkey.clone()
+        };
+        let original = original
+            .clone()
+            .insert_packets(vec![
+                Packet::SecretSubkey(subkey),
+                Packet::Signature(binding.clone()),
+            ])
+            .unwrap()
+            .0;
+        fs::write(&saved, original.as_tsk().armored().to_vec().unwrap()).unwrap();
+        for protected_output in [false, true] {
+            let mut args = vec![
+                "export",
+                "--input",
+                words.to_str().unwrap(),
+                "--certificate",
+                saved.to_str().unwrap(),
+            ];
+            if protected_output {
+                args.extend(["--passphrase-file", password.to_str().unwrap()]);
+            } else {
+                args.push("--unprotected");
+            }
+            let result = succeeds(cli(&args));
+            let restored = Cert::from_bytes(&result.stdout).unwrap();
+            assert_eq!(restored.keys().secret().count(), 1);
+            assert!(restored.keys().subkeys().all(|key| !key.key().has_secret()));
+            let primary = restored
+                .primary_key()
+                .key()
+                .clone()
+                .parts_into_secret()
+                .unwrap();
+            assert_eq!(primary.has_unencrypted_secret(), !protected_output);
+            if protected_output {
+                assert!(
+                    primary
+                        .decrypt_secret(&Password::from(&b"export password"[..]))
+                        .unwrap()
+                        .into_keypair()
+                        .is_ok()
+                );
+            }
+            // Public keys and signatures must remain exactly as saved.
+            assert_eq!(
+                restored.strip_secret_key_material(),
+                original.clone().strip_secret_key_material()
+            );
+        }
+    }
+}
+
+#[test]
 fn explicit_input_rounding_and_entropy_derivation() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("bits.txt");
