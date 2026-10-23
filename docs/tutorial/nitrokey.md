@@ -2,9 +2,9 @@
 
 Alice's primary key lives on paper and in an offline keyring. Her subkeys do
 the daily work, and so far they sit in a keyring on her everyday computer.
-This guide moves them onto a Nitrokey 3, so that the secrets leave the
-computer entirely, and shows how to keep the paper and the offline keyring as
-the backup behind the card.
+This guide moves them onto a Nitrokey 3 and removes their working copies
+from the daily keyring. The paper and the offline keyring remain the backup
+behind the card.
 
 The GnuPG commands work with any OpenPGP card, such as a YubiKey or an older
 Nitrokey. Lines that use `nitropy` are specific to the Nitrokey 3. The
@@ -137,18 +137,64 @@ replaced only on `save`, but the copy makes that detail irrelevant:
 `offline-gnupg` is untouched either way. `card-gnupg` now holds only stubs
 and a second copy of the primary secret, so Alice deletes it.
 
-On the daily computer, the card and the saved public certificate are all
-GnuPG needs:
+### Removing the daily computer's software copies
+
+Moving keys from `card-gnupg` leaves any copies in the daily keyring intact.
+Importing a public certificate or running `--card-status` does not remove
+them. Before deleting those copies, Alice tests signing and decryption with
+the offline backup and the card unplugged. The paper cannot replace this
+backup of the private subkeys.
+
+On the daily computer, she imports the public certificate and compares its
+subkey fingerprints with the signature and encryption fingerprints on the card:
 
 ```sh
-gpg --import alice-public.asc     # the public certificate from the offline keyring
-gpg --card-status                 # creates the stubs that point at the card
-gpg --list-secret-keys            # ssb> marks a subkey that lives on the card
+gpg --import alice-public.asc
+gpg --list-secret-keys --with-subkey-fingerprint PRIMARY_FINGERPRINT
+gpg --card-status
 ```
 
-The `>` after `ssb` is GnuPG's way of saying the secret is on a card. The
-primary shows as `sec#`: GnuPG knows it exists and has no secret for it,
-which is exactly the arrangement from [openpgp-keys.md](openpgp-keys.md).
+After checking the fingerprints and backup, she deletes the software copies
+of those two subkeys from the **daily keyring**. Replace the placeholders
+below with the full subkey fingerprints and retain the quoted `!`, which
+selects exactly that subkey. She repeats this for an authentication subkey
+if she moved one. These commands leave the public certificate and other
+keys in place; see the [GnuPG command reference](https://www.gnupg.org/documentation/manuals/gnupg/Operational-GPG-Commands.html).
+
+```sh
+gpg --delete-secret-keys 'SIGNING_SUBKEY_FINGERPRINT!'
+gpg --delete-secret-keys 'ENCRYPTION_SUBKEY_FINGERPRINT!'
+gpgconf --kill gpg-agent
+gpg --card-status
+gpg --list-secret-keys --with-subkey-fingerprint PRIMARY_FINGERPRINT
+```
+
+With the card inserted, `--card-status` now creates stubs for the removed
+subkeys. Each moved subkey must show `ssb>`, indicating a card key, and the
+primary must show `sec#`, indicating that its secret is unavailable. A plain
+`ssb` for a moved subkey means a software copy is still available.
+
+Alice also removes any secret-key export files used to transfer these
+subkeys to the daily computer, after verifying the offline backup. Keyring
+deletion does not erase copies in other files, backups, or snapshots.
+
+### Checking that daily operations require the card
+
+With the card inserted, Alice signs and decrypts a harmless test message,
+using the exact subkeys she moved:
+
+```sh
+printf 'Card migration test\n' > card-test.txt
+gpg --local-user 'SIGNING_SUBKEY_FINGERPRINT!' --armor --detach-sign --output - card-test.txt
+gpg --recipient 'ENCRYPTION_SUBKEY_FINGERPRINT!' --output card-test.pgp --encrypt card-test.txt
+gpg --decrypt card-test.pgp
+```
+
+She unplugs the card, runs `gpgconf --kill gpg-agent`, and repeats the signing
+and decryption commands. Both must fail or request the missing card; she
+cancels that request. If either succeeds without the card, she stops and
+checks for remaining software copies or another connected card holding the
+same key. Reconnecting the card must make both operations work again.
 
 ## 4. Daily use
 
