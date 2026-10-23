@@ -179,8 +179,13 @@ fn write_output(path: &str, bytes: &[u8]) -> Result<()> {
         let mut file = options.open(path).with_context(|| {
             format!("cannot create {path} (existing files are never overwritten)")
         })?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
+        // A failed write must not leave a partial file behind: existing files
+        // are never overwritten, so it would also block the retry.
+        if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            drop(file);
+            let _ = std::fs::remove_file(path);
+            return Err(error).with_context(|| format!("cannot write {path}"));
+        }
     }
     Ok(())
 }
