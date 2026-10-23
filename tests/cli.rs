@@ -2,7 +2,7 @@ use paper_pgp::{
     backup::{Backup, ENTROPY_LEN, WORD_COUNT, WORDLIST, WORDLIST_SHA256},
     master,
 };
-use sequoia_openpgp::{Cert, parse::Parse, serialize::Serialize};
+use sequoia_openpgp::{Cert, Packet, parse::Parse, serialize::Serialize};
 use std::{
     fs,
     path::Path,
@@ -134,6 +134,59 @@ fn file_workflow_and_protection() {
         ))
         .is_ok()
     );
+    // Restore into the saved public certificate: nothing is signed.
+    let saved = dir.path().join("saved-public.asc");
+    fs::write(&saved, &public_bytes).unwrap();
+    let restored = succeeds(cli(&[
+        "export",
+        "-i",
+        words,
+        "--certificate",
+        saved.to_str().unwrap(),
+        "--passphrase-file",
+        password.to_str().unwrap(),
+    ]));
+    let restored_cert = Cert::from_bytes(&restored.stdout).unwrap();
+    assert!(restored_cert.is_tsk());
+    assert_eq!(restored_cert.fingerprint(), public.fingerprint());
+    let signatures = |cert: &Cert| {
+        cert.clone()
+            .into_packets()
+            .filter(|p| matches!(p, Packet::Signature(_)))
+            .count()
+    };
+    assert_eq!(signatures(&restored_cert), signatures(&public));
+    assert!(String::from_utf8_lossy(&restored.stderr).contains("nothing signed"));
+    for conflicting in [
+        ["--identity", "X", "--unprotected"],
+        ["--expires", "1y", "--unprotected"],
+        ["--public", "--public", "--public"],
+    ] {
+        let mut args = vec![
+            "export",
+            "-i",
+            words,
+            "--certificate",
+            saved.to_str().unwrap(),
+        ];
+        args.extend(conflicting);
+        assert_eq!(cli(&args).status.code(), Some(2), "{conflicting:?}");
+    }
+    let other = Backup::new(Zeroizing::new([5; ENTROPY_LEN]), 1767225344);
+    let other_cert = master::certificate(&other, "Other", SystemTime::now(), None).unwrap();
+    let mut other_bytes = Vec::new();
+    other_cert.armored().serialize(&mut other_bytes).unwrap();
+    fs::write(&saved, other_bytes).unwrap();
+    let mismatch = cli(&[
+        "export",
+        "-i",
+        words,
+        "--certificate",
+        saved.to_str().unwrap(),
+        "--unprotected",
+    ]);
+    assert_eq!(mismatch.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&mismatch.stderr).contains("does not belong"));
     fs::write(&password, "\n").unwrap();
     assert!(!cli(&args).status.success());
     // Existing keys are not imported; the command no longer exists.
@@ -496,6 +549,36 @@ fn gpg_import_add_subkeys_and_recover() {
     assert_eq!(merged.keys().count(), 3);
     succeeds(gpg(
         recovered_home.0.path(),
+        &["--quick-add-key", &fingerprint, "ed25519", "auth", "1y"],
+    ));
+    // Restore into GnuPG's own public export instead: no new signature, both
+    // subkey bindings kept, and the primary secret usable for new subkeys.
+    let restored_home = AgentHome::new();
+    let restored =
+        master::restore(&Backup::decode(&backup.encode()).unwrap(), &public.stdout).unwrap();
+    assert_eq!(restored.fingerprint(), cert.fingerprint());
+    assert_eq!(restored.keys().subkeys().count(), 2);
+    let protected = master::protect(restored, b"integration-test-only").unwrap();
+    let restored_file = home.0.path().join("restored.pgp");
+    let mut bytes = Vec::new();
+    protected.as_tsk().serialize(&mut bytes).unwrap();
+    fs::write(&restored_file, bytes).unwrap();
+    succeeds(gpg(
+        restored_home.0.path(),
+        &["--import", restored_file.to_str().unwrap()],
+    ));
+    let listing = String::from_utf8(
+        succeeds(gpg(
+            restored_home.0.path(),
+            &["--with-colons", "--list-secret-keys", &fingerprint],
+        ))
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(listing.lines().filter(|l| l.starts_with("sec:")).count(), 1);
+    assert_eq!(listing.lines().filter(|l| l.starts_with("ssb:")).count(), 2);
+    succeeds(gpg(
+        restored_home.0.path(),
         &["--quick-add-key", &fingerprint, "ed25519", "auth", "1y"],
     ));
 }

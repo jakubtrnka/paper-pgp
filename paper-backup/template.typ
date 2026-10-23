@@ -128,9 +128,10 @@
     the public-key packet body, then that body (including the timestamp).
     Compare it with page 1. User IDs and export passphrases do not affect it.
 
-    Recovery certifies the written User ID anew. Merge the saved public certificate
-    to retain its packets. Check effective identities, capabilities, expiry, and
-    revocations: fresh signatures can reactivate retired User IDs or replace earlier settings.
+    Prefer restoring the secret into the saved public certificate: it signs nothing,
+    so identities, subkeys, expiry, and revocations stay as saved. Without it,
+    recovery certifies the written User ID anew; merging a saved certificate later
+    keeps its packets, but fresh signatures can reactivate retired User IDs or replace earlier settings.
 
     *Back up private subkeys separately:* the master cannot recreate them or decrypt
     messages encrypted to lost subkeys. The checksum detects damage, not malicious changes.

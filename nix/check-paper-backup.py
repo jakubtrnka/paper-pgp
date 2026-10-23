@@ -45,7 +45,8 @@ require(
     re.search(r"Self-certify.*?current export time, certification-only flags", recovery_text),
     "Self-certification must use current export time, not the stored key timestamp",
 )
-require("Recovery certifies the written User ID anew" in recovery_text, "Fresh certification semantics are missing")
+require("it signs nothing" in recovery_text, "Restore-into-certificate recovery is missing")
+require("recovery certifies the written User ID anew" in recovery_text, "Fresh certification semantics are missing")
 require("fresh signatures can reactivate retired User IDs" in recovery_text, "Certificate merge caveat is missing")
 
 wordlist_bytes = Path(wordlist_path).read_bytes()

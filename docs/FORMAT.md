@@ -246,14 +246,21 @@ from word recovery and are not needed to recover the secret.
 
 The backup deliberately contains only the entropy and the creation time.
 User IDs, expirations, revocations, third-party certifications, and subkey
-bindings remain in the public certificate. Export creates a fresh
-certification-only certificate and certifies the supplied User ID anew.
-**Save and merge the original public certificate** to retain its packets,
-including revocations and subkey bindings. Their presence does not guarantee
-preservation of the original effective policy: a fresh certification can change
-capabilities and expiry or reactivate a revoked User ID. This does not undo a
-compromised-primary-key revocation. Verify effective metadata before using or
-publishing the merged certificate. Private subkeys require separate backups.
+bindings remain in the public certificate. Export has two modes:
+
+- **Restore** (`--certificate`): parse exactly one saved certificate, require
+  its fingerprint to equal the recovered primary's, and insert the secret-key
+  packet. Nothing is signed; every packet of the saved certificate is kept, so
+  its effective identities, capabilities, expiry, and revocations apply
+  unchanged. This is the preferred recovery.
+- **Fresh** (`--identity`): create a certification-only certificate and
+  certify the supplied User ID anew, as specified above. Merging it with a
+  saved certificate retains the saved packets, but the fresh certification can
+  change capabilities and expiry or reactivate a revoked User ID. It does not
+  undo a compromised-primary-key revocation. Verify effective metadata before
+  using or publishing a merged certificate.
+
+Private subkeys require separate backups in both modes.
 
 ## Independent vectors
 

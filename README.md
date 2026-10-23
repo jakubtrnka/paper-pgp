@@ -61,35 +61,45 @@ Shell redirection does not provide these protections.
 ## Recover from paper
 
 Type the words into `recovered-words.txt`, separated by spaces or newlines,
-without numbering. Choose an identity you intend to certify now; check that
-the one recorded on paper is still appropriate. Export with that identity
-and a passphrase file for the recovered key:
+without numbering. If you still have your saved public certificate, restore
+the secret into it. Nothing is signed, so identities, subkeys, expiry, and
+revocations stay exactly as saved:
+
+```sh
+paper-pgp export --input recovered-words.txt --certificate alice-public.asc \
+  --passphrase-file passphrase.txt --output recovered-primary.asc
+```
+
+Without the saved certificate, export a fresh certificate instead. Choose an
+identity you intend to certify now; check that the one recorded on paper is
+still appropriate:
 
 ```sh
 paper-pgp export --input recovered-words.txt --identity 'Alice <alice@example.org>' \
   --passphrase-file passphrase.txt --output recovered-primary.asc
 ```
 
-Compare the printed fingerprint with the one on paper and your saved public
-certificate. Try this recovery before relying on your backup.
+In both cases, compare the printed fingerprint with the one on paper. Try a
+recovery before relying on your backup.
 
-Exports have no expiry by default. Add `--expires 2y` to an export to set a
-two-year validity from now. If you use expiry, set it again during recovery;
+Fresh exports have no expiry by default. Add `--expires 2y` to set a two-year
+validity from now. If you use expiry, set it again during a fresh recovery;
 it is not stored in the words.
 
 **The words recover only the primary secret and its creation time**, which is
-stored rounded down to a multiple of 1024 seconds. Keep
-separate backups of your public certificate (identities, signatures, and
-subkey bindings), revocation certificate, and private subkeys. Merge the
-saved public certificate after recovery. A recovered primary can create new
-subkeys, but cannot decrypt messages encrypted to a lost encryption subkey.
+stored rounded down to a multiple of 1024 seconds. Keep separate backups of
+your public certificate (identities, signatures, and subkey bindings),
+revocation certificate, and private subkeys. A recovered primary can create
+new subkeys, but cannot decrypt messages encrypted to a lost encryption
+subkey.
 
-Each export creates a fresh certification-only certificate for the supplied
-identity. Merging retains the saved certificate's packets, but the fresh
-certification can change capabilities or expiry and reactivate a revoked
-User ID. Check the merged certificate before use; the
+A fresh export certifies the supplied identity anew. If you later merge it
+with a saved certificate, the fresh certification can change capabilities or
+expiry and reactivate a revoked User ID. Check the merged certificate before
+use; the
 [recovery walkthrough](docs/tutorial/backup-recovery.md#recovering-after-losing-the-offline-keyring)
-explains which settings can change.
+explains which settings can change. Restoring with `--certificate` avoids
+this.
 
 ## More information
 
