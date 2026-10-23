@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use gpg_keys::{
+use paper_pgp::{
     backup::{self, Backup, ENTROPY_LEN, Entropy, WORD_COUNT},
     master, paper,
 };

@@ -60,7 +60,7 @@ fn argon2_workspace_is_wiped_before_deallocation() {
         .map(|byte| format!("{byte:08b}"))
         .collect();
     OBSERVE.store(true, Ordering::Relaxed);
-    let secret = gpg_keys::backup::derive(&bits);
+    let secret = paper_pgp::backup::derive(&bits);
     OBSERVE.store(false, Ordering::Relaxed);
     let secret = secret.unwrap();
     assert_eq!(hex::encode(secret.as_ref()), vector[2]);

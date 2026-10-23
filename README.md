@@ -1,6 +1,6 @@
 # PGP key backups with pen and paper
 
-`gpg-keys` is a command-line tool for creating an Ed25519 OpenPGP primary key
+`paper-pgp` is a command-line tool for creating an Ed25519 OpenPGP primary key
 that you can back up as a short list of handwritten words. Type the words
 back in to recover the same key, with the same fingerprint.
 
@@ -21,14 +21,14 @@ unreleased and has not received an independent security audit.
 
 ## Build
 
-From the repository root, use Nix to open a shell with `gpg-keys` available:
+From the repository root, use Nix to open a shell with `paper-pgp` available:
 
 ```sh
 nix shell .
 ```
 
 Or build with `cargo build --release --locked` and use
-`./target/release/gpg-keys`. This requires Rust with edition 2024 support,
+`./target/release/paper-pgp`. This requires Rust with edition 2024 support,
 OpenSSL 3 development libraries, `pkg-config`, and Clang/libclang.
 `nix develop` provides the development tools; `nix flake check` runs the
 Rust tests and validates the printable documents.
@@ -39,8 +39,8 @@ On your offline machine, save your chosen export passphrase in a private
 file named `passphrase.txt`. Then generate the words and export the key:
 
 ```sh
-gpg-keys random --output words.txt
-gpg-keys export --input words.txt --identity 'Alice <alice@example.org>' \
+paper-pgp random --output words.txt
+paper-pgp export --input words.txt --identity 'Alice <alice@example.org>' \
   --passphrase-file passphrase.txt --output primary.asc
 ```
 
@@ -66,7 +66,7 @@ the one recorded on paper is still appropriate. Export with that identity
 and a passphrase file for the recovered key:
 
 ```sh
-gpg-keys export --input recovered-words.txt --identity 'Alice <alice@example.org>' \
+paper-pgp export --input recovered-words.txt --identity 'Alice <alice@example.org>' \
   --passphrase-file passphrase.txt --output recovered-primary.asc
 ```
 
@@ -99,7 +99,7 @@ explains which settings can change.
   and recovery without this application.
 - [Paper booklet](paper-backup/README.md) — build, print, or customize the
   blank backup document.
-- `gpg-keys --help` and `gpg-keys <command> --help` — all commands and options.
+- `paper-pgp --help` and `paper-pgp <command> --help` — all commands and options.
 
 The backup uses the SLIP-39 wordlist and checksum, but is its own format, not
 a SLIP-39 share or wallet mnemonic. The code is [MIT-licensed](LICENSE); the wordlist

@@ -526,22 +526,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
-name = "gpg-keys"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argon2",
- "clap",
- "getrandom 0.4.3",
- "hex",
- "hkdf",
- "sequoia-openpgp",
- "sha2",
- "tempfile",
- "zeroize",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -948,6 +932,22 @@ dependencies = [
  "libc",
  "openssl-sys",
  "pkg-config",
+]
+
+[[package]]
+name = "paper-pgp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "clap",
+ "getrandom 0.4.3",
+ "hex",
+ "hkdf",
+ "sequoia-openpgp",
+ "sha2",
+ "tempfile",
+ "zeroize",
 ]
 
 [[package]]

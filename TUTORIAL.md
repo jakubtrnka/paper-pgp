@@ -40,7 +40,7 @@ Each pair has a public part to share and a secret part to protect.
 ## 2. Alice's primary key, identity, and fingerprint
 
 Following the README, Alice generates 22 words and exports `primary.asc`.
-The words let `gpg-keys` reconstruct her primary secret key. The export adds
+The words let `paper-pgp` reconstruct her primary secret key. The export adds
 her chosen identity and packages the result for OpenPGP tools.
 
 She imports it into a dedicated GnuPG home on her offline machine:
@@ -53,7 +53,7 @@ gpg --homedir offline-gnupg --list-secret-keys --with-subkey-fingerprint
 
 The listing shows a primary key marked `[C]`, for **certification**. Its job
 is to sign statements about identities and subkeys. The keys exported by
-`gpg-keys` have only this capability; Alice will add subkeys for other jobs.
+`paper-pgp` have only this capability; Alice will add subkeys for other jobs.
 
 ### Her name is a claim attached to the key
 
@@ -204,7 +204,7 @@ distribute the updated public certificate.
 
 Expiry is recorded in signatures. Extending it changes the certificate's
 metadata, while the key fingerprints stay the same. The same principle
-applies to the primary: `gpg-keys export --expires 2y` sets a validity of two
+applies to the primary: `paper-pgp export --expires 2y` sets a validity of two
 years from the export time. Without `--expires`, its exports do not expire.
 
 An expiry date helps limit continued use of a forgotten key. Someone holding
@@ -330,7 +330,7 @@ and the machine on which she generates or recovers keys.
 ### The primary-key packet and fingerprint
 
 The primary public-key packet contains a version, creation time, algorithm,
-and public key material. For `gpg-keys`, these are version 4, the backed-up
+and public key material. For `paper-pgp`, these are version 4, the backed-up
 timestamp, algorithm 22 (legacy OpenPGP Ed25519), and the curve identifier
 plus encoded Ed25519 public point.
 
@@ -356,7 +356,7 @@ derivation and encoding are specified in [FORMAT.md](FORMAT.md).
 | Subkey revocation | `0x28` | Primary key in Alice's setup | Primary key and subkey |
 | Certification revocation | `0x30` | The certifier | Its earlier certification |
 
-`gpg-keys` creates a type `0x13` self-certification. It carries the certify
+`paper-pgp` creates a type `0x13` self-certification. It carries the certify
 flag, optional primary expiry, algorithm preferences, and a primary-User-ID
 marker. Subkey bindings carry the subkey's capabilities and expiry instead.
 

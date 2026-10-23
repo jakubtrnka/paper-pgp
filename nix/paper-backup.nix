@@ -5,7 +5,7 @@
   liberation_ttf,
 }:
 stdenvNoCC.mkDerivation {
-  pname = "gpg-keys-paper-backup";
+  pname = "paper-pgp-paper-backup";
   version = "1";
 
   src = lib.fileset.toSource {

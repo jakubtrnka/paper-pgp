@@ -4,7 +4,7 @@
   liberation_ttf,
   poppler-utils,
   python3,
-  gpg-keys,
+  paper-pgp,
   paper-backup,
 }:
 runCommand "check-paper-backup"
@@ -18,7 +18,7 @@ runCommand "check-paper-backup"
   }
   ''
     # Compile the standalone CLI template and compare it with the repo build.
-    ${gpg-keys}/bin/gpg-keys template --output standalone.typ
+    ${paper-pgp}/bin/paper-pgp template --output standalone.typ
     typst compile --ignore-system-fonts \
       --font-path ${liberation_ttf}/share/fonts standalone.typ standalone.pdf
     python ${./check-paper-backup.py} \
