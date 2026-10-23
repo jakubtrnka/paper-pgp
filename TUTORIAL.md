@@ -39,7 +39,7 @@ Each pair has a public part to share and a secret part to protect.
 
 ## 2. Alice's primary key, identity, and fingerprint
 
-Following the README, Alice generates 35 words and exports `primary.asc`.
+Following the README, Alice generates 22 words and exports `primary.asc`.
 The words let `gpg-keys` reconstruct her primary secret key. The export adds
 her chosen identity and packages the result for OpenPGP tools.
 
@@ -340,8 +340,8 @@ fingerprint = SHA-1(0x99 || two-byte body length || public-key packet body)
 
 Names, expiry, and capabilities are not fields in that packet. For the
 certificates this tool exports, they are represented by User IDs and their
-self-signatures. The primary secret is a 32-byte native Ed25519 seed;
-compact backups derive it from the stored 20-byte entropy. The precise
+self-signatures. The primary secret is a 32-byte native Ed25519 seed,
+derived from the stored 20-byte entropy. The precise
 derivation and encoding are specified in [FORMAT.md](FORMAT.md).
 
 ### Who signs what

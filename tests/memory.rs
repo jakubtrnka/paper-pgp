@@ -50,7 +50,7 @@ static ALLOCATOR: ObservedAllocator = ObservedAllocator;
 fn argon2_workspace_is_wiped_before_deallocation() {
     let vector: Vec<_> = include_str!("vectors.txt")
         .lines()
-        .nth(2)
+        .nth(1)
         .unwrap()
         .split('\t')
         .collect();
@@ -63,7 +63,7 @@ fn argon2_workspace_is_wiped_before_deallocation() {
     let secret = gpg_keys::backup::derive(&bits);
     OBSERVE.store(false, Ordering::Relaxed);
     let secret = secret.unwrap();
-    assert_eq!(hex::encode(secret.payload()), vector[2]);
+    assert_eq!(hex::encode(secret.as_ref()), vector[2]);
     assert_eq!(WORKSPACES.load(Ordering::Relaxed), 1);
     assert_eq!(DIRTY_WORKSPACES.load(Ordering::Relaxed), 0);
 }

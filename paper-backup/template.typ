@@ -1,21 +1,16 @@
 // Shared by main.typ and the CLI's standalone `template` output.
-#let backup-document(words, kind: "compact") = {
-  assert(kind == "compact" or kind == "raw", message: "Unknown backup variant")
-  let is-raw = kind == "raw"
-  let count = if is-raw { 44 } else { 35 }
-  let first-count = calc.ceil(count / 2)
-  let payload-len = if is-raw { 32 } else { 20 }
-  let body-len = 18 + payload-len
-  let byte-len = body-len + 5
+#let backup-document(words) = {
+  let count = 22
+  let first-count = 11
   assert(words.len() == 1024, message: "Expected the pinned 1024-word SLIP-39 wordlist")
   assert(words.first() == "academic" and words.last() == "zero")
-  set document(title: "OpenPGP master key paper backup — GPKB v1", date: none)
+  set document(title: "OpenPGP master key paper backup — GPG Key Backup v1", date: none)
   set page(
     paper: "a5",
     margin: (x: 12mm, top: 12mm, bottom: 13mm),
     footer: context {
       set text(size: 7pt, fill: luma(90))
-      grid(columns: (1fr, auto), [GPKB v1 · Keep all pages together], counter(page).display("1 / 1", both: true))
+      grid(columns: (1fr, auto), [GPG Key Backup v1 · Keep all pages together], counter(page).display("1 / 1", both: true))
     },
   )
   set text(font: "Liberation Sans", size: 9pt, lang: "en")
@@ -49,9 +44,9 @@
   let hash = "bcc4555340332d169718aed8bf31dd9d5248cb7da6e5d355140ef4f1e601eec3"
 
   [
-    #eyebrow[#if is-raw [RAW / 256-BIT PRIVATE SEED] else [COMPACT / 160-BIT ENTROPY]]
+    #eyebrow[160-BIT ENTROPY / 22 WORDS]
     = OpenPGP master key
-    *GPKB version 1 · #count words · Words 01–#padded(first-count, 2)*
+    *GPG Key Backup, version 1 · #count words · Words 01–#padded(first-count, 2)*
 
     Anyone with these words can recover your certification master secret.
     Store this paper securely. The words are unencrypted.
@@ -79,38 +74,30 @@
     #pagebreak()
     #eyebrow[OFFLINE RECOVERY / WORDS TO BACKUP]
     = Decode the backup
-    This is *GPKB v1*, using the SLIP-39 wordlist. It is a distinct format,
-    not a SLIP-39 share. No passphrase is needed to recover the stored secret.
+    This is a *GPG Key Backup* (GPKB), version 1, using the SLIP-39 wordlist and checksum.
+    It is a distinct format, not a SLIP-39 share. No passphrase is needed to recover the stored secret.
 
     1. Look up each of the #count words in the indexed appendix. Indices start at zero.
        Ignore word case. Do not silently correct words.
-    2. Express each index as exactly 10 binary bits, most significant bit first.
-       Concatenate them in word order: #(count * 10) bits in total.
-    3. #if is-raw [There are no padding bits.] else [Check that the final 6 bits are zero and remove them.]
-       Regroup into #byte-len bytes, most significant bit first. Validate all fields below.
+    2. Verify the checksum (`rs1024` from SLIP-0039). Feed the ASCII codes of `gpkb`
+       (103 112 107 98) and then all #count indices, in order, into this function.
+       The result must be 1. Any error in up to three words is detected. If it fails,
+       trying every alternative word at each position finds a single wrong word.
+    #raw("GEN = [0xe0e040, 0x1c1c080, 0x3838100, 0x7070200, 0xe0e0009,\n       0x1c0c2412, 0x38086c24, 0x3090fc48, 0x21b1f890, 0x3f3f120]\nchk = 1\nfor value in values:\n    b = chk >> 20\n    chk = (chk & 0xfffff) << 10 ^ value\n    for i in range(10):\n        chk ^= GEN[i] if (b >> i) & 1 else 0", block: true)
+    3. Express each of the first 19 indices as exactly 10 binary bits, most significant
+       bit first. Concatenate them in word order: 190 bits. Read the fields below.
 
-    == Serialized bytes
+    == Bit fields
     Ranges are zero-based and exclude their upper bound.
     #table(
       columns: (auto, 1fr), inset: 3pt,
       stroke: (x: none, y: 0.25pt + luma(170)),
-      table.header([*Bytes*], [*Required value / meaning*]),
-      [`[0,4)`], [ASCII `GPKB` (`47 50 4b 42`)],
-      [`[4,5)`], [Version `01`],
-      [`[5,13)`], [Wordlist hash prefix: `bc c4 55 53 40 33 2d 16`],
-      [`[13,17)`], [Creation timestamp: unsigned big-endian Unix seconds],
-      [`[17,18)`], [#if is-raw [Tag `00`: Raw] else [Tag `01`: CompactEntropy]],
-      [#raw("[18," + str(body-len) + ")")], [#payload-len bytes of secret payload; preserve leading zeros],
-      [#raw("[" + str(body-len) + "," + str(byte-len) + ")")], [First 5 bytes of the checksum digest],
+      table.header([*Bits*], [*Required value / meaning*]),
+      [`[0,8)`], [Version `01`],
+      [`[8,30)`], [Creation time divided by 1024: unsigned big-endian integer],
+      [`[30,190)`], [160 bits of entropy (20 bytes); preserve leading zeros],
     )
-    Reject unknown tags, incorrect lengths, or a tag inconsistent with the word count.
-    A compact backup has 35 words; a raw backup has 44 words. The encoded tag determines recovery.
-
-    == Checksum
-    Hash the following concatenation with SHA-256:
-    #raw("ASCII(\"gpg-keys/backup/v1\") || 0x00\n|| serialized_bytes[0:" + str(body-len) + "]", block: true)
-    The first 5 digest bytes must match the final 5 serialized bytes.
-    This covers the marker, timestamp, tag, and payload. Padding is checked separately.
+    Reject a different word count, a failed checksum, or another version.
 
     == Pinned wordlist
     SHA-256 of lowercase ASCII words in index order, each followed by LF, including the last:
@@ -119,20 +106,15 @@
     #pagebreak()
     #eyebrow[OFFLINE RECOVERY / BACKUP TO OPENPGP]
     = Restore the master key
-    #if is-raw [
-      *Raw:* use the stored 32-byte payload directly as the native Ed25519 private seed.
-      *Do not apply HKDF.* This preserves the imported private key.
-    ] else [
-      *CompactEntropy:* derive 32 bytes with HKDF-SHA256 (RFC 5869):
-      #raw("IKM  = stored 20-byte entropy\nsalt = ASCII(\"gpg-keys/master/v1\")\ninfo = ASCII(\"ed25519-certification\")\nPRK  = HMAC-SHA256(key=salt, message=IKM)\nkey_seed = HMAC-SHA256(\n  key=PRK, message=info || 0x01)", block: true)
-      The ASCII strings have no trailing NUL. The output is the native Ed25519 private seed.
-    ]
+    *Entropy to seed:* derive 32 bytes with HKDF-SHA256 (RFC 5869):
+    #raw("IKM  = stored 20-byte entropy\nsalt = ASCII(\"GPG Key Backup v1\")\ninfo = ASCII(\"ed25519-certification\")\nPRK  = HMAC-SHA256(key=salt, message=IKM)\nkey_seed = HMAC-SHA256(\n  key=PRK, message=info || 0x01)", block: true)
+    The ASCII strings have no trailing NUL. The output is the native Ed25519 private seed.
     Use the seed as specified by RFC 8032, not an already clamped scalar.
 
     == OpenPGP parameters
     Construct a version 4 primary-key packet with a compatible OpenPGP library:
-    - Creation timestamp: read bytes `[13,17)` as an unsigned big-endian integer
-      (`BE32`); seconds since 1970-01-01 00:00:00 UTC. *Reuse this stored time.*
+    - Creation timestamp: the 22-bit field from bits `[8,30)` multiplied by 1024
+      (shifted left by 10 bits); seconds since 1970-01-01 00:00:00 UTC. *Reuse this stored time.*
     - Legacy EdDSA algorithm 22; Ed25519 curve OID `1.3.6.1.4.1.11591.15.1`.
       OID encoding with length: `09 2b 06 01 04 01 da 47 0f 01`.
     - Public MPI: `0x40` followed by the 32-byte Ed25519 public key; bit length 263.
